@@ -133,7 +133,7 @@ class ResnetClient:
                         mean += int(value)
                         count += 1
                     n = n + 1
-        if epoch % 50 == 0:
+        if epoch % 50 == 0 or (epoch > 100 and epoch % 600 == 1):
             print("--------------")
             print("这是客户端{}的精度，使用全体测试集".format(m))
             print("模型rate：{}".format(self.model_rate))

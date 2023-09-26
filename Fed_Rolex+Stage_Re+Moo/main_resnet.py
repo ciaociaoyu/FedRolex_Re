@@ -127,13 +127,6 @@ def run_experiment():
         logger.safe(True)
         scheduler.step()
         lr = optimizer.param_groups[0]['lr']
-        epoch_iter_count = epoch % 600
-        if epoch_iter_count < 200:
-            lr = 8e-3
-        elif epoch_iter_count < 400:
-            lr = 2e-3
-        else:
-            lr = 5e-4
         local, param_idx, user_idx = server.broadcast(local, lr)
         test_model = global_model
         test(dataset['test'], data_split['test'], label_split, test_model, logger, epoch, local, user_idx)
@@ -181,12 +174,7 @@ def run_experiment():
                         './output/model/{}_best.pt'.format(cfg['model_tag']))
         logger.reset()
         t6 = time.time()
-        print(f'Broadcast Time      : {datetime.timedelta(seconds=t1 - t0)}')
-        print(f'Client Step Time    : {datetime.timedelta(seconds=t2 - t1)}')
-        print(f'Server Step Time    : {datetime.timedelta(seconds=t3 - t2)}')
-        print(f'Stats Time          : {datetime.timedelta(seconds=t4 - t3)}')
-        print(f'Test Time           : {datetime.timedelta(seconds=t5 - t4)}')
-        print(f'Output Copy Time    : {datetime.timedelta(seconds=t6 - t5)}')
+
         print(f'<<Total epoch Time>>: {datetime.timedelta(seconds=t6 - t0)}')
     logger.safe(False)
     [ray.kill(client) for client in local]

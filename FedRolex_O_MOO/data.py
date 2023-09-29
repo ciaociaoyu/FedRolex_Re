@@ -10,7 +10,7 @@ import datasets
 from config import cfg
 from datasets.gld import GLD160
 
-
+import pdb
 def fetch_dataset(data_name, subset):
     dataset = {}
     print('fetching data {}...'.format(data_name))
@@ -104,6 +104,7 @@ def iid(dataset, num_users):
         num_items_i = min(len(idx), num_items)
         data_split[i] = torch.tensor(idx)[torch.randperm(len(idx))[:num_items_i]].tolist()
         label_split[i] = torch.unique(label[data_split[i]]).tolist()
+        pdb.set_trace()
         idx = list(set(idx) - set(data_split[i]))
     return data_split, label_split
 

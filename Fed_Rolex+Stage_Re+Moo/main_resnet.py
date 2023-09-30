@@ -32,6 +32,7 @@ for k in cfg:
     exec('parser.add_argument(\'--{0}\', default=cfg[\'{0}\'], type=type(cfg[\'{0}\']))'.format(k))
 parser.add_argument('--control_name', default=None, type=str)
 parser.add_argument('--interpolate', default=None, type=str)
+parser.add_argument('--aggregate', default=None, type=str)
 parser.add_argument('--seed', default=None, type=int)
 parser.add_argument('--devices', default=None, nargs='+', type=int)
 parser.add_argument('--algo', default='roll', type=str)
@@ -48,6 +49,7 @@ args = vars(parser.parse_args())
 cfg['lr'] = int(args['lr'])
 cfg['overlap'] = args['overlap']
 cfg['interpolate'] = args['interpolate']
+cfg['aggregate'] = args['aggregate']
 cfg['weighting'] = args['weighting']
 cfg['init_seed'] = int(args['seed'])
 if args['algo'] == 'roll':

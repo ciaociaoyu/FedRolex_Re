@@ -203,7 +203,7 @@ class ResnetServerRoll:
             [local_parameters_vector_g[m] for m in range(len(local_parameters))])
         #sol = vector = np.full(10, 0.1)
         # 得到每个客户端的系数
-        # print(sol)
+        print(sol)
         for m in range(len(local_parameters)):
             global_vector_tensor = global_vector_tensor + torch.tensor(sol[m]) * local_parameters_vector_g[m]
             global_vector_tensor = global_vector_tensor.float()

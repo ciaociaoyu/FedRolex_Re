@@ -166,8 +166,8 @@ class ResnetServerRoll:
 
         for m in range(len(local_parameters)):
             local_parameters_gradient = copy.deepcopy(self.global_parameters)
-            parameter_type = k.split('.')[-1]
             for k, v in local_parameters_gradient.items():
+                parameter_type = k.split('.')[-1]
                 tmp_v = v.new_zeros(v.size(), dtype=torch.float32, device='cpu')
                 if 'weight' in parameter_type or 'bias' in parameter_type:
                     if parameter_type == 'weight':
@@ -199,13 +199,13 @@ class ResnetServerRoll:
                 local_parameters_gradient[k] = tmp_v
             local_parameters_vector_g[m] = self.convert12(local_parameters_gradient.items()).float()
         #print(local_parameters_vector_g)
-        #sol, min_norm = MinNormSolver.find_min_norm_element(
-        #    [local_parameters_vector_g[m] for m in range(len(local_parameters))])
-        sol = vector = np.full(10, 0.1)
+        sol, min_norm = MinNormSolver.find_min_norm_element(
+            [local_parameters_vector_g[m] for m in range(len(local_parameters))])
+        #sol = vector = np.full(10, 0.1)
         # 得到每个客户端的系数
-        print(sol)
+        # print(sol)
         for m in range(len(local_parameters)):
-            global_vector_tensor = global_vector_tensor + torch.tensor(0.1) * local_parameters_vector_g[m]
+            global_vector_tensor = global_vector_tensor + torch.tensor(sol[m]) * local_parameters_vector_g[m]
             global_vector_tensor = global_vector_tensor.float()
             # 更新后的全局参数=系数*客户端梯度+全局参数
 

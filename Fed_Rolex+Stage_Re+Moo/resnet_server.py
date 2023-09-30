@@ -57,7 +57,7 @@ class ResnetServerRoll:
     def broadcast(self, local, lr):
         cfg = self.cfg
         self.stage = self.rounds // 600
-        if self.rounds > 100:
+        if 100 < self.rounds < 2999:
             if self.rounds % 600 == 0:
                 # 扩展模型
                 if cfg['interpolate'] == 'bi':

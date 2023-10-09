@@ -198,10 +198,11 @@ class ResnetServerRoll:
                         torch.meshgrid(param_idx[m][k])]
                 local_parameters_gradient[k] = tmp_v
             local_parameters_vector_g[m] = self.convert12(local_parameters_gradient.items()).float()
-        #print(local_parameters_vector_g)
-        sol, min_norm = MinNormSolver.find_min_norm_element(
-            [local_parameters_vector_g[m] for m in range(len(local_parameters))])
-        #sol = vector = np.full(10, 0.1)
+        # print(local_parameters_vector_g)
+        sol, min_norm = MinNormSolver.find_min_norm_element(cfg,
+                                                            [local_parameters_vector_g[m] for m in
+                                                             range(len(local_parameters))])
+        # sol = vector = np.full(10, 0.1)
         # 得到每个客户端的系数
         print(sol)
         for m in range(len(local_parameters)):

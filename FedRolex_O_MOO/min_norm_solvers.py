@@ -3,7 +3,7 @@ import torch
 
 
 class MinNormSolver:
-    MAX_ITER = 250
+    MAX_ITER = 400
     STOP_CRIT = 1e-5
 
     def _min_norm_element_from2(v1v1, v1v2, v2v2):
@@ -106,8 +106,8 @@ class MinNormSolver:
 
         return next_point
 
-    def find_min_norm_element(vecs):
-        # ...（省略部分代码）
+    def find_min_norm_element(cfg, vecs):
+        e = cfg['moo_restrain']
         dps = {}
         init_sol, dps = MinNormSolver._min_norm_2d(vecs, dps)
 
@@ -157,7 +157,7 @@ class MinNormSolver:
             
             # 以下为新加入的约束条件
             # 对 new_sol_vec 的元素进行约束
-            new_sol_vec = torch.clamp(new_sol_vec, min=0.05, max=0.15)
+            new_sol_vec = torch.clamp(new_sol_vec, min=0.1-e, max=0.1+e)
             
             # 由于约束可能导致元素之和不再是 1，因此需要重新标准化
             new_sol_vec /= torch.sum(new_sol_vec)

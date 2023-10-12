@@ -158,6 +158,61 @@ class ResnetServerRoll:
         return flattened_tensor
 
     def combine(self, local_parameters, param_idx, user_idx):
+        temp = copy.deepcopy(param_idx)
+        count = OrderedDict()
+        self.global_parameters = self.global_model.cpu().state_dict()
+        updated_parameters = copy.deepcopy(self.global_parameters)
+        tmp_counts_cpy = copy.deepcopy(self.tmp_counts)
+        for k, v in updated_parameters.items():
+            parameter_type = k.split('.')[-1]
+            count[k] = v.new_zeros(v.size(), dtype=torch.float32, device='cpu')
+            tmp_v = v.new_zeros(v.size(), dtype=torch.float32, device='cpu')
+            for m in range(len(local_parameters)):
+                if 'weight' in parameter_type or 'bias' in parameter_type:
+                    if parameter_type == 'weight':
+                        if v.dim() > 1:
+                            if 'linear' in k:
+                                label_split = self.label_split[user_idx[m]]
+                                param_idx[m][k] = list(param_idx[m][k])
+                                param_idx[m][k][0] = param_idx[m][k][0][label_split]
+                                tmp_v[torch.meshgrid(param_idx[m][k])] += self.tmp_counts[k][torch.meshgrid(
+                                    param_idx[m][k])] * local_parameters[m][k][label_split]
+                                count[k][torch.meshgrid(param_idx[m][k])] += self.tmp_counts[k][torch.meshgrid(
+                                    param_idx[m][k])]
+                                tmp_counts_cpy[k][torch.meshgrid(param_idx[m][k])] += 1
+                            else:
+                                K = 1
+                                tmp_v[torch.meshgrid(param_idx[m][k])] += K * local_parameters[m][k]
+                                count[k][torch.meshgrid(param_idx[m][k])] += K
+                                tmp_counts_cpy[k][torch.meshgrid(param_idx[m][k])] += 1
+                        else:
+                            tmp_v[param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]] * local_parameters[m][k]
+                            count[k][param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]]
+                            tmp_counts_cpy[k][param_idx[m][k]] += 1
+                    else:
+                        if 'linear' in k:
+                            label_split = self.label_split[user_idx[m]]
+                            param_idx[m][k] = param_idx[m][k][label_split]
+                            tmp_v[param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]] * local_parameters[m][k][
+                                label_split]
+                            count[k][param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]]
+                            tmp_counts_cpy[k][param_idx[m][k]] += 1
+                        else:
+                            tmp_v[param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]] * local_parameters[m][k]
+                            count[k][param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]]
+                            tmp_counts_cpy[k][param_idx[m][k]] += 1
+                else:
+                    tmp_v += self.tmp_counts[k] * local_parameters[m][k]
+                    count[k] += self.tmp_counts[k]
+                    tmp_counts_cpy[k] += 1
+            tmp_v[count[k] > 0] = tmp_v[count[k] > 0].div_(count[k][count[k] > 0])
+            v[count[k] > 0] = tmp_v[count[k] > 0].to(v.dtype)
+            self.tmp_counts = tmp_counts_cpy
+
+
+
+
+
         # 这个函数增加了MOO(多目标优化)相关的设置
         cfg = self.cfg
         self.global_parameters = self.global_model.cpu().state_dict()
@@ -168,47 +223,70 @@ class ResnetServerRoll:
             local_parameters_gradient = copy.deepcopy(self.global_parameters)
             for k, v in local_parameters_gradient.items():
                 parameter_type = k.split('.')[-1]
-                tmp_v = v.new_zeros(v.size(), dtype=torch.float32, device='cpu')
+                tmp_v = copy.deepcopy(updated_parameters[k])
+                # tmp_v = v.new_zeros(v.size(), dtype=torch.float32, device='cpu')
+                tmp_v = tmp_v - v
                 if 'weight' in parameter_type or 'bias' in parameter_type:
                     if parameter_type == 'weight':
                         if v.dim() > 1:
                             if 'linear' in k:
                                 label_split = self.label_split[user_idx[m]]
-                                param_idx[m][k] = list(param_idx[m][k])
-                                param_idx[m][k][0] = param_idx[m][k][0][label_split]
-                                tmp_v[torch.meshgrid(param_idx[m][k])] = local_parameters[m][k][label_split] - v[
-                                    torch.meshgrid(param_idx[m][k])]
+                                temp[m][k] = list(temp[m][k])
+                                temp[m][k][0] = temp[m][k][0][label_split]
+                                tmp_v[torch.meshgrid(temp[m][k])] = local_parameters[m][k][label_split] - v[
+                                    torch.meshgrid(temp[m][k])]
                             else:
-                                tmp_v[torch.meshgrid(param_idx[m][k])] = local_parameters[m][k] - v[
-                                    torch.meshgrid(param_idx[m][k])]
+                                tmp_v[torch.meshgrid(temp[m][k])] = local_parameters[m][k] - v[
+                                    torch.meshgrid(temp[m][k])]
                         else:
-                            tmp_v[torch.meshgrid(param_idx[m][k])] = local_parameters[m][k] - v[
-                                torch.meshgrid(param_idx[m][k])]
+                            tmp_v[torch.meshgrid(temp[m][k])] = local_parameters[m][k] - v[
+                                torch.meshgrid(temp[m][k])]
                     else:
                         if 'linear' in k:
                             label_split = self.label_split[user_idx[m]]
-                            param_idx[m][k] = param_idx[m][k][label_split]
-                            tmp_v[torch.meshgrid(param_idx[m][k])] = local_parameters[m][k][label_split] - v[
-                                torch.meshgrid(param_idx[m][k])]
+                            temp[m][k] = temp[m][k][label_split]
+                            tmp_v[torch.meshgrid(temp[m][k])] = local_parameters[m][k][label_split] - v[
+                                torch.meshgrid(temp[m][k])]
                         else:
-                            tmp_v[torch.meshgrid(param_idx[m][k])] = local_parameters[m][k] - v[
-                                torch.meshgrid(param_idx[m][k])]
+                            tmp_v[torch.meshgrid(temp[m][k])] = local_parameters[m][k] - v[
+                                torch.meshgrid(temp[m][k])]
                 else:
-                    tmp_v[torch.meshgrid(param_idx[m][k])] = local_parameters[m][k] - v[
-                        torch.meshgrid(param_idx[m][k])]
+                    tmp_v[torch.meshgrid(temp[m][k])] = local_parameters[m][k] - v[
+                        torch.meshgrid(temp[m][k])]
                 local_parameters_gradient[k] = tmp_v
             local_parameters_vector_g[m] = self.convert12(local_parameters_gradient.items()).float()
         # print(local_parameters_vector_g)
+        # avg = self.average_tensors(local_parameters_vector_g)
         sol, min_norm = MinNormSolver.find_min_norm_element(cfg,
                                                             [local_parameters_vector_g[m] for m in
                                                              range(len(local_parameters))])
         # sol = vector = np.full(10, 0.1)
         # 得到每个客户端的系数
         print(sol)
+        temp_parameters_vector_g = torch.zeros(len(global_vector_tensor)).float()
         for m in range(len(local_parameters)):
-            global_vector_tensor = global_vector_tensor + torch.tensor(sol[m]) * local_parameters_vector_g[m]
-            global_vector_tensor = global_vector_tensor.float()
+            temp_parameters_vector_g = temp_parameters_vector_g + torch.tensor(sol[m]) * local_parameters_vector_g[m]
+
             # 更新后的全局参数=系数*客户端梯度+全局参数
+        # temp_parameters_vector_g = temp_parameters_vector_g * 10
+        variances = torch.var(temp_parameters_vector_g, unbiased=True)  # 无偏方差
+        abs_sum_val = torch.sum(torch.abs(temp_parameters_vector_g))
+
+        print('moo求和')
+        print(abs_sum_val)
+        print('moo方差')
+        print(variances)
+        updated_parameters_vector = self.convert12(updated_parameters.items()).float()
+        updated_parameters_vector_g = updated_parameters_vector - global_vector_tensor
+        variances = torch.var(updated_parameters_vector_g, unbiased=True)  # 无偏方差
+
+        abs_sum_val = torch.sum(torch.abs(updated_parameters_vector_g))
+        print('avg求和')
+        print(abs_sum_val)
+        print('avg方差')
+        print(variances)
+        global_vector_tensor = global_vector_tensor + temp_parameters_vector_g
+        global_vector_tensor = global_vector_tensor.float()
 
         prev_ind = 0
         for k, v in self.global_parameters.items():

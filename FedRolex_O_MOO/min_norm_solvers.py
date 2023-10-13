@@ -157,10 +157,8 @@ class MinNormSolver:
             
             # 以下为新加入的约束条件
             # 对 new_sol_vec 的元素进行约束
-            new_sol_vec = torch.clamp(new_sol_vec, min=0.1-e, max=0.1+e)
-            
-            # 由于约束可能导致元素之和不再是 1，因此需要重新标准化
-            new_sol_vec /= torch.sum(new_sol_vec)
+
+            new_sol_vec = new_sol_vec*2*e+0.1-0.2*e
 
             # 检查变化量
             change = new_sol_vec - sol_vec

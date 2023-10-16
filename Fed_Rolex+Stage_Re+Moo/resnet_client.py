@@ -125,7 +125,7 @@ class ResnetClient:
             output['loss'] = output['loss'].mean() if cfg['world_size'] > 1 else output['loss']
             evaluation = metric.evaluate(cfg['metric_name']['test']['Local'], data_input, output)
             results.append((evaluation, input_size))
-            if epoch % 50 == 0 or epoch % 600 == 1:
+            if epoch % 50 == 0:
                 # 只输出Acc，暂时不管loss
                 n = 1
                 for key, value in evaluation.items():
@@ -133,7 +133,7 @@ class ResnetClient:
                         mean += int(value)
                         count += 1
                     n = n + 1
-        if epoch % 50 == 0 or epoch % 600 == 1:
+        if epoch % 50 == 0:
             print("--------------")
             print("这是客户端{}的精度，使用全体测试集".format(m))
             print("模型rate：{}".format(self.model_rate))

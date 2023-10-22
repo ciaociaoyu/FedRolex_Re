@@ -129,6 +129,8 @@ def run_experiment():
         logger.safe(True)
         scheduler.step()
         lr = optimizer.param_groups[0]['lr']
+        # if epoch > 10:
+        #     lr = 2e-4
         local, param_idx, user_idx = server.broadcast(local, lr)
         test_model = global_model
         test(dataset['test'], data_split['test'], label_split, test_model, logger, epoch, local, user_idx)

@@ -57,6 +57,10 @@ class ResnetServerRoll:
     def broadcast(self, local, lr):
         cfg = self.cfg
         self.stage = self.rounds // 600
+        # if 1000 > self.rounds > 0:
+        #     self.stage = 0
+        # else:
+        #     self.stage = (self.rounds - 1000) // 600 + 1
         if 100 < self.rounds < 2900:
             if self.rounds % 600 == 0:
                 # 扩展模型

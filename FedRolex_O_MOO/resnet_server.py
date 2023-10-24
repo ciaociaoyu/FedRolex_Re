@@ -269,22 +269,7 @@ class ResnetServerRoll:
 
             # 更新后的全局参数=系数*客户端梯度+全局参数
         # temp_parameters_vector_g = temp_parameters_vector_g * 10
-        variances = torch.var(temp_parameters_vector_g, unbiased=True)  # 无偏方差
-        abs_sum_val = torch.sum(torch.abs(temp_parameters_vector_g))
 
-        print('moo求和')
-        print(abs_sum_val)
-        print('moo方差')
-        print(variances)
-        updated_parameters_vector = self.convert12(updated_parameters.items()).float()
-        updated_parameters_vector_g = updated_parameters_vector - global_vector_tensor
-        variances = torch.var(updated_parameters_vector_g, unbiased=True)  # 无偏方差
-
-        abs_sum_val = torch.sum(torch.abs(updated_parameters_vector_g))
-        print('avg求和')
-        print(abs_sum_val)
-        print('avg方差')
-        print(variances)
         global_vector_tensor = global_vector_tensor + temp_parameters_vector_g
         global_vector_tensor = global_vector_tensor.float()
 

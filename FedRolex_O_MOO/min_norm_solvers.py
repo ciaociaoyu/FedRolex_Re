@@ -56,23 +56,31 @@ class MinNormSolver:
                     sol = [(i, j), c, d]
         return sol, dps
 
-    def _projection2simplex(y):
+    def _projection2simplex(y, a, b):
         """
-        Given y, it solves argmin_z |y-z|_2 st \sum z = 1 , 1 >= z_i >= 0 for all i
+        Given y, it solves argmin_z |y-z|_2 st \sum z = 1 , b >= z_i >= a for all i
         """
-        m = len(y)
-        sorted_y, _ = torch.sort(y, descending=True)
+        # Convert y into z-space
+        z = (y - a) / (b - a)
+
+        m = len(z)
+        sorted_z, _ = torch.sort(z, descending=True)
         tmpsum = 0.0
-        tmax_f = (torch.sum(y) - 1.0) / m
+        tmax_f = (torch.sum(z) - 1.0) / m
         for i in range(m - 1):
-            tmpsum += sorted_y[i]
+            tmpsum += sorted_z[i]
             tmax = (tmpsum - 1) / (i + 1.0)
-            if tmax > sorted_y[i + 1]:
+            if tmax > sorted_z[i + 1]:
                 tmax_f = tmax
                 break
-        return torch.maximum(y - tmax_f, torch.zeros_like(y))
+        z_projected = torch.clamp(z - tmax_f, 0, 1)
 
-    def _next_point(cur_val, grad, n):
+        # Convert z_projected back into x-space
+        x_projected = a + (b - a) * z_projected
+
+        return x_projected
+
+    def _next_point(cur_val, grad, n, c_a, c_b):
         proj_grad = grad - (torch.sum(grad) / n)
 
         # 创建空的张量来存储满足条件的值
@@ -102,12 +110,14 @@ class MinNormSolver:
         next_point = proj_grad * t + cur_val
 
         # 假设 _projection2simplex 已经支持PyTorch张量
-        next_point = MinNormSolver._projection2simplex(next_point)
+
+        next_point = MinNormSolver._projection2simplex(next_point, c_a, c_b)
 
         return next_point
 
     def find_min_norm_element(cfg, vecs):
-        e = cfg['moo_restrain']
+        cc = cfg['moo_restrain']
+        [c_a, c_b] = cc.split('-').float()
         dps = {}
         init_sol, dps = MinNormSolver._min_norm_2d(vecs, dps)
 
@@ -136,7 +146,7 @@ class MinNormSolver:
             grad_dir = -1.0 * torch.matmul(grad_mat, sol_vec)
 
             # 假设 _next_point 已经支持PyTorch张量
-            new_point = MinNormSolver._next_point(sol_vec, grad_dir, n)
+            new_point = MinNormSolver._next_point(sol_vec, grad_dir, n, c_a, c_b)
 
             # 重新计算内积
             v1v1 = torch.tensor(0.0)
@@ -155,14 +165,14 @@ class MinNormSolver:
             # 更新解向量
             new_sol_vec = nc * sol_vec + (1 - nc) * new_point
             
-            # 以下为新加入的约束条件
-            # 对 new_sol_vec 的元素进行约束
 
-            new_sol_vec = new_sol_vec*2*e+0.1-0.2*e
 
             # 检查变化量
             change = new_sol_vec - sol_vec
-            if torch.sum(torch.abs(change)) < MinNormSolver.STOP_CRIT:
+            if torch.sum(torch.abs(change)) < MinNormSolver.STOP_CRIT or iter_count < MinNormSolver.MAX_ITER:
+                # 以下为新加入的约束条件
+                # 对 new_sol_vec 的元素进行约束
+                # new_sol_vec = new_sol_vec * 2 * e + 0.1 - 0.2 * e
                 return new_sol_vec, nd  # 注意这里返回的是 new_sol_vec 而不是 sol_vec
 
             sol_vec = new_sol_vec

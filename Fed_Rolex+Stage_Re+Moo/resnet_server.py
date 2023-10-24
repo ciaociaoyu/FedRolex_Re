@@ -48,6 +48,66 @@ class ResnetServerRoll:
                 self.roll_idx[k] = 0
         return self.model_idxs
 
+    def generate_model_for_test(self, scaler_rate):
+        # 产生一个特定比率的模型
+        cfg = self.cfg
+        idx_i = None
+        idx = {}
+        for k, v in self.global_parameters.items():
+            parameter_type = k.split('.')[-1]
+            if 'weight' in parameter_type or 'bias' in parameter_type:
+                if parameter_type == 'weight':
+                    if v.dim() > 1:
+                        input_size = v.size(1)
+                        output_size = v.size(0)
+                        if 'conv1' in k or 'conv2' in k:
+                            if idx_i is None:
+                                idx_i = torch.arange(input_size, device=v.device)
+                            # idx_i是下一层的输入通道，上一层的输出通道=下一层的输入通道
+                            # input_idx_i_m是这一层的输入通道
+                            input_idx_i_m = idx_i
+                            model_idx = torch.arange(output_size, device=v.device)
+                            output_idx_i_m = model_idx[:int(np.ceil(output_size * scaler_rate))]
+                            # 这个可以让模型正确初始化
+                            idx_i = output_idx_i_m
+                        elif 'shortcut' in k:
+                            input_idx_i_m = idx[k.replace('shortcut', 'conv1')][1]
+                            output_idx_i_m = idx_i
+                        elif 'linear' in k:
+                            input_idx_i_m = idx_i
+                            output_idx_i_m = torch.arange(output_size, device=v.device)
+                        else:
+                            raise ValueError('Not valid k')
+                        idx[k] = (output_idx_i_m, input_idx_i_m)
+                    else:
+                        input_idx_i_m = idx_i
+                        idx[k] = input_idx_i_m
+                else:
+                    input_size = v.size(0)
+                    if 'linear' in k:
+                        input_idx_i_m = torch.arange(input_size, device=v.device)
+                        idx[k] = input_idx_i_m
+                    else:
+                        # 偏置层是一维的
+                        input_idx_i_m = idx_i
+                        idx[k] = input_idx_i_m
+            else:
+                pass
+        local_parameters = {}
+        for k, v in self.global_parameters.items():
+            parameter_type = k.split('.')[-1]
+            if 'weight' in parameter_type or 'bias' in parameter_type:
+                if 'weight' in parameter_type:
+                    if v.dim() > 1:
+                        local_parameters[k] = copy.deepcopy(v[torch.meshgrid(idx[k])])
+                    else:
+                        local_parameters[k] = copy.deepcopy(v[idx[k]])
+                else:
+                    local_parameters[k] = copy.deepcopy(v[idx[k]])
+            else:
+                local_parameters[k] = copy.deepcopy(v)
+        return local_parameters
+
     def step(self, local_parameters, param_idx, user_idx):
         self.combine(local_parameters, param_idx, user_idx)
         self.rounds += 1
@@ -61,9 +121,7 @@ class ResnetServerRoll:
             if self.rounds % 600 == 0:
                 # 扩展模型
                 if cfg['interpolate'] == 'bi':
-                    self.model_scaler_rate(2**(self.stage-1) * 0.0625, 2**(self.stage) * 0.0625)
-
-
+                    self.model_scaler_rate(2 ** (self.stage - 1) * 0.0625, 2 ** (self.stage) * 0.0625)
 
         self.global_model.train(True)
         num_active_users = cfg['active_user']
@@ -324,8 +382,9 @@ class ResnetServerRoll:
                     local_parameters_gradient[k] = tmp_v
                 local_parameters_vector_g[m] = self.convert12(local_parameters_gradient.items()).float()
             # print(local_parameters_vector_g)
-            sol, min_norm = MinNormSolver.find_min_norm_element(
-                [local_parameters_vector_g[m] for m in range(len(local_parameters))])
+            sol, min_norm = MinNormSolver.find_min_norm_element(cfg,
+                                                                [local_parameters_vector_g[m] for m in
+                                                                 range(len(local_parameters))])
             # sol = vector = np.full(10, 0.1)
             # 得到每个客户端的系数
             print(sol)

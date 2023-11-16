@@ -41,11 +41,12 @@ parser.add_argument('--weighting', default='avg', type=str)
 parser.add_argument('--g_epochs', default=None, type=int)
 parser.add_argument('--l_epochs', default=None, type=int)
 parser.add_argument('--overlap', default=None, type=float)
-
+parser.add_argument('--moo_restrain', default=None, type=float)
 parser.add_argument('--schedule', default=None, nargs='+', type=int)
 # parser.add_argument('--exp_name', default=None, type=str)
 args = vars(parser.parse_args())
 
+cfg['moo_restrain'] = args['moo_restrain']
 cfg['lr'] = int(args['lr'])
 cfg['overlap'] = args['overlap']
 cfg['interpolate'] = args['interpolate']
@@ -132,7 +133,12 @@ def run_experiment():
         # if epoch > 10:
         #     lr = 2e-4
         local, param_idx, user_idx = server.broadcast(local, lr)
-        test_model = global_model
+        stage = epoch // 600
+        test_rate = 2 ** stage * 0.0625
+        test_model_dict = server.generate_model_for_test(test_rate)
+        test_model = resnet.resnet18(model_rate=test_rate, cfg=cfg).to('cuda')
+        test_model.load_state_dict(test_model_dict)
+        # test_model = global_model
         test(dataset['test'], data_split['test'], label_split, test_model, logger, epoch, local, user_idx)
         t1 = time.time()
 

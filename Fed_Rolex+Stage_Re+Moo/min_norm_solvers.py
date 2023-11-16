@@ -101,13 +101,13 @@ class MinNormSolver:
         # 计算下一个点
         next_point = proj_grad * t + cur_val
 
-        # 假设 _projection2simplex 已经支持PyTorch张量
+
         next_point = MinNormSolver._projection2simplex(next_point)
 
         return next_point
 
-    def find_min_norm_element(vecs):
-        # ...（省略部分代码）
+    def find_min_norm_element(cfg, vecs):
+        e = cfg['moo_restrain']
         dps = {}
         init_sol, dps = MinNormSolver._min_norm_2d(vecs, dps)
 
@@ -131,7 +131,7 @@ class MinNormSolver:
             for j in range(n):
                 grad_mat[i, j] = dps[(i, j)]
 
-        while iter_count < MinNormSolver.MAX_ITER:
+        while 1:
             # 计算梯度方向
             grad_dir = -1.0 * torch.matmul(grad_mat, sol_vec)
 
@@ -149,25 +149,20 @@ class MinNormSolver:
                     v1v2 += sol_vec[i] * new_point[j] * dps[(i, j)]
                     v2v2 += new_point[i] * new_point[j] * dps[(i, j)]
 
-            # 假设 _min_norm_element_from2 已经支持PyTorch张量
             nc, nd = MinNormSolver._min_norm_element_from2(v1v1, v1v2, v2v2)
 
             # 更新解向量
             new_sol_vec = nc * sol_vec + (1 - nc) * new_point
-            
-            # 以下为新加入的约束条件
-            # 对 new_sol_vec 的元素进行约束
-            new_sol_vec = torch.clamp(new_sol_vec, min=0.05, max=0.15)
-            
-            # 由于约束可能导致元素之和不再是 1，因此需要重新标准化
-            new_sol_vec /= torch.sum(new_sol_vec)
 
             # 检查变化量
             change = new_sol_vec - sol_vec
-            if torch.sum(torch.abs(change)) < MinNormSolver.STOP_CRIT:
+            if torch.sum(torch.abs(change)) < MinNormSolver.STOP_CRIT or iter_count < MinNormSolver.MAX_ITER:
+                # 以下为新加入的约束条件
+                # 对 new_sol_vec 的元素进行约束
+                new_sol_vec = new_sol_vec * 2 * e + 0.1 - 0.2 * e
                 return new_sol_vec, nd  # 注意这里返回的是 new_sol_vec 而不是 sol_vec
 
             sol_vec = new_sol_vec
             iter_count = iter_count + 1
 
-        return sol_vec, nd  # 注意这里返回的也应该考虑是不是 new_sol_vec
+        return sol_vec, nd

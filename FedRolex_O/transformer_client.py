@@ -12,7 +12,7 @@ from metrics import Metric
 from utils import make_optimizer, to_device
 
 
-@ray.remote(num_gpus=0.8)
+@ray.remote(num_gpus=0.15)
 class TransformerClient:
     def __init__(self, log_path, cfg):
         self.dataset = None

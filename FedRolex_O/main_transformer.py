@@ -12,7 +12,7 @@ import torch
 import torch.backends.cudnn as cudnn
 from tqdm import tqdm
 
-import models
+from models import transformer
 from config import cfg
 from data import fetch_dataset
 from logger import Logger
@@ -67,19 +67,7 @@ cfg['metric_name'] = {'train': {'Local': ['Local-Loss', 'Local-Perplexity']},
 # ray.init(_temp_dir='/egr/research-zhanglambda/samiul/tmp')
 # ray.init(_temp_dir='/localscratch/alamsami/tmp', object_store_memory=10**11)
 
-ray.init(
-    _temp_dir='/localscratch/alamsami/tmp', object_store_memory=10 ** 11,
-    _system_config={
-        "object_spilling_config": json.dumps(
-            {
-                "type": "filesystem",
-                "params": {
-                    "directory_path": '/egr/research-zhanglambda/samiul/tmp',
-                }
-            },
-        )
-    },
-)
+ray.init()
 
 
 def main():
@@ -111,7 +99,7 @@ def run_experiment():
     os.environ['PYTHONHASHSEED'] = str(seed)
     dataset = fetch_dataset(cfg['data_name'], cfg['subset'])
     process_dataset(dataset)
-    global_model = models.transformer_nwp(model_rate=cfg["global_model_rate"], cfg=cfg)
+    global_model = transformer.transformer(model_rate=cfg["global_model_rate"], cfg=cfg)
     optimizer = make_optimizer(global_model, cfg['lr'])
     scheduler = make_scheduler(optimizer)
     last_epoch = 1

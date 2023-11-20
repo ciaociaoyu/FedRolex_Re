@@ -12,12 +12,13 @@ import torch
 import torch.backends.cudnn as cudnn
 from tqdm import tqdm
 
+from metrics import Metric
 from models import transformer
 from config import cfg
-from data import fetch_dataset
+from data import fetch_dataset, split_dataset, SplitDataset, BatchDataset
 from logger import Logger
 from transformer_client import TransformerClient
-from utils import save, process_control, process_dataset, make_optimizer, make_scheduler
+from utils import save, process_control, process_dataset, make_optimizer, make_scheduler, to_device
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
@@ -103,47 +104,48 @@ def run_experiment():
     optimizer = make_optimizer(global_model, cfg['lr'])
     scheduler = make_scheduler(optimizer)
     last_epoch = 1
-    data_split, label_split = dataset['train'], dataset['train']
-    num_active_users = cfg['active_user']
+    # data_split, label_split = dataset['train'], dataset['train']
+    data_split, label_split = split_dataset(dataset, cfg['num_users'], cfg['data_split_mode'])
+    num_active_users = int(np.ceil(cfg['frac'] * cfg['num_users']))
+    cfg['active_user'] = num_active_users
 
     logger_path = os.path.join('output', 'runs', 'train_{}'.format(f'{cfg["model_tag"]}_{cfg["exp_name"]}'))
     logger = Logger(logger_path)
 
     cfg_id = ray.put(cfg)
-    dataset_ref = dataset['train']
+    dataset_ref = {
+        'dataset': ray.put(dataset['train']),
+        'split': ray.put(data_split['train']),
+        'label_split': ray.put(label_split)}
 
     server = Server(global_model, cfg['model_rate'], dataset_ref, cfg_id)
     num_users_per_step = 8
-    local = [TransformerClient.remote(logger.log_path, [cfg_id]) for _ in range(num_users_per_step)]
+    local = [TransformerClient.remote(logger.log_path, [cfg_id]) for _ in range(num_active_users)]
     # local = [TransformerClient(logger.log_path, [cfg_id]) for _ in range(num_active_users)]
-
+    rates = server.model_rate
     for epoch in range(last_epoch, cfg['num_epochs']['global'] + 1):
         t0 = time.time()
         logger.safe(True)
         scheduler.step()
         lr = optimizer.param_groups[0]['lr']
-        local, configs = server.broadcast(local, lr)
+        local, param_idx, user_idx = server.broadcast(local, lr)
         t1 = time.time()
 
         start_time = time.time()
         local_parameters = []
-        for user_start_idx in range(0, num_active_users, num_users_per_step):
-            idxs = list(range(user_start_idx, min(num_active_users, user_start_idx + num_users_per_step)))
-            sel_cfg = [configs[idx] for idx in idxs]
-            [client.update.remote(*config) for client, config in zip(local, sel_cfg)]
-            dt = ray.get([client.step.remote(user_start_idx + m, num_active_users, start_time)
-                          for m, client in enumerate(local[:len(sel_cfg)])])
-            local_parameters += [v for _k, v in enumerate(dt)]
-            torch.cuda.empty_cache()
+        dt = ray.get([client.step.remote(m, num_active_users, start_time)
+                      for m, client in enumerate(local)])
+
+        local_parameters = [v for _k, v in enumerate(dt)]
         t2 = time.time()
-        server.step(local_parameters)
+        server.step(local_parameters, param_idx, user_idx)
         t3 = time.time()
 
         global_model = server.global_model
         test_model = global_model
         t4 = time.time()
         if True or epoch % 20 == 1:
-            test(dataset['test'], test_model, logger, epoch, local)
+            test(dataset['test'], test_model, logger, epoch)
         t5 = time.time()
         logger.safe(False)
         model_state_dict = global_model.state_dict()
@@ -175,33 +177,25 @@ def run_experiment():
     return
 
 
-def test(dataset, model, logger, epoch, local):
-    num_users_per_step = len(local)
-    num_test_users = 200  # len(dataset)
-    if epoch % 600 == 0:
-        num_test_users = 5000
-    model_id = ray.put(model)
+def test(dataset, model, logger, epoch):
     with torch.no_grad():
+        metric = Metric()
         model.train(False)
-        sel_cl = np.random.choice(len(dataset), num_test_users)
-        for user_start_idx in tqdm(range(0, num_test_users, num_users_per_step)):
-            processes = []
-            for user_idx in range(user_start_idx, min(user_start_idx + num_users_per_step, num_test_users)):
-                processes.append(local[user_idx % num_users_per_step]
-                                 .test_model_for_user
-                                 .remote(user_idx,
-                                         [ray.put(dataset[sel_cl[user_idx]]), model_id]))
-            results = ray.get(processes)
-            for result in results:
-                if result:
-                    evaluation, input_size = result[0]
-                    logger.append(evaluation, 'test', input_size)
-
+        model = model.to('cuda')
+        batch_dataset = BatchDataset(dataset, cfg['bptt'])
+        for i, input in enumerate(batch_dataset):
+            input_size = input['label'].size(0)
+            input = to_device(input, 'cuda')
+            output = model(input)
+            output['loss'] = output['loss'].mean() if cfg['world_size'] > 1 else output['loss']
+            evaluation = metric.evaluate(cfg['metric_name']['test']['Global'], input, output)
+            logger.append(evaluation, 'test', input_size)
         info = {'info': ['Model: {}'.format(cfg['model_tag']),
                          'Test Epoch: {}({:.0f}%)'.format(epoch, 100.)]}
         logger.append(info, 'test', mean=False)
-        logger.write('test', cfg['metric_name']['test']['Local'])
-    return evaluation
+        logger.write('test', cfg['metric_name']['test']['Global'])
+    return
+
 
 
 if __name__ == "__main__":

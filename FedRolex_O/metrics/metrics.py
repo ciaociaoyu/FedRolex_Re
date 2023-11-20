@@ -8,6 +8,8 @@ def Accuracy(output, target, topk=1):
     with torch.no_grad():
         batch_size = target.size(0)
         pred_k = output.topk(topk, 1, True, True)[1]
+        print(pred_k)
+        print(target)
         correct_k = pred_k.eq(target.view(-1, 1).expand_as(pred_k)).float().sum()
         acc = (correct_k * (100.0 / batch_size)).item()
     return acc

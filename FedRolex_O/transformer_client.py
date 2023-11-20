@@ -6,7 +6,8 @@ import ray
 import torch
 
 import models
-from datasets.lm import StackOverflowClientDataset
+from models import transformer
+from data import BatchDataset, SplitDataset, make_data_loader
 from logger import Logger
 from metrics import Metric
 from utils import make_optimizer, to_device
@@ -33,22 +34,32 @@ class TransformerClient:
         self.cfg = cfg
 
     def update(self, client_id, dataset_ref, model_ref):
-        dataset = dataset_ref
-        label_split = dataset_ref
-        local_parameters = model_ref['local_params']
-        self.dataset = StackOverflowClientDataset(dataset, self.cfg['seq_length'], self.cfg['batch_size']['train'])
-        self.local_parameters = copy.deepcopy(local_parameters)
+        dataset = ray.get(dataset_ref['dataset'])
+        data_split = ray.get(dataset_ref['split'])
+        label_split = ray.get(dataset_ref['label_split'])
+        local_parameters = ray.get(model_ref['local_params'])
+        # dataset_ref = torch.load('data_store')
+        # dataset = (dataset_ref['dataset'])
+        # data_split = (dataset_ref['split'])
+        # label_split = (dataset_ref['label_split'])
+        # local_parameters = {k: v.clone().cuda() for k, v in local_parameters.items()}
+        self.local_parameters = local_parameters
         self.client_id = client_id
         self.model_rate = model_ref['model_rate']
+        cfg = self.cfg
+        self.dataset = BatchDataset(dataset, cfg['bptt'])
+
         self.label_split = label_split
         self.lr = model_ref['lr']
         self.metric = Metric()
 
     def step(self, m, num_active_users, start_time):
         cfg = self.cfg
-        self.model = models.transformer_nwp(model_rate=self.model_rate, cfg=self.cfg).cpu()
+        print(cfg['bptt'])
+        self.model = transformer.transformer(model_rate=self.model_rate, cfg=self.cfg).cpu()
+
         self.model.load_state_dict(self.local_parameters)
-        self.model = self.model.cuda()
+        self.model = self.model.to('cuda')
         self.model.train(True)
         self.optimizer = make_optimizer(self.model, self.lr)
         self.m = m
@@ -58,7 +69,8 @@ class TransformerClient:
             for i, step_input in enumerate(self.dataset):
                 input_size = step_input['label'].size(0)
                 # step_input['label_split'] = None
-                step_input = to_device(step_input, cfg['device'])
+                step_input['label_split'] = torch.tensor(self.label_split[self.client_id])
+                step_input = to_device(step_input, 'cuda')
                 self.optimizer.zero_grad()
                 output = self.model(step_input)
                 output['loss'].backward()
@@ -95,7 +107,7 @@ class TransformerClient:
         cfg = self.cfg
         metric = Metric()
         [dataset, model] = ray.get(ids)
-        dataset = StackOverflowClientDataset(dataset, self.cfg['seq_length'], self.cfg['batch_size']['test'])
+
         model = model.to('cuda')
         results = []
         for _, data_input in enumerate(dataset):

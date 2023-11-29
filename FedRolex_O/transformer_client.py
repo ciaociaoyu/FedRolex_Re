@@ -103,21 +103,24 @@ class TransformerClient:
             self.logger.append(info, 'train', mean=False)
             self.logger.write('train', cfg['metric_name']['train']['Local'])
 
-    def test_model_for_user(self, m, ids):
-        cfg = self.cfg
-        metric = Metric()
-        [dataset, model] = ray.get(ids)
+    def test_model_for_user(self, m, batch_dataset):
+        with torch.no_grad():
+            cfg = self.cfg
+            metric = Metric()
+            model = self.model
+            model.train(False)
+            model = model.to('cuda')
+            for i, input in enumerate(batch_dataset):
+                input_size = input['label'].size(0)
+                input = to_device(input, 'cuda')
+                output = model(input)
+                output['loss'] = output['loss'].mean() if cfg['world_size'] > 1 else output['loss']
+                evaluation = metric.evaluate(cfg['metric_name']['test']['Global'], input, output)
+            print("--------------")
+            print("这是客户端{}的精度，使用全体测试集".format(m))
+            print("模型rate：{}".format(self.model_rate))
+            print("--------------")
 
-        model = model.to('cuda')
-        results = []
-        for _, data_input in enumerate(dataset):
-            input_size = data_input['label'].size(0)
-            data_input = to_device(data_input, 'cuda')
-            output = model(data_input)
-            output['loss'] = output['loss'].mean() if cfg['world_size'] > 1 else output['loss']
-            s = output['score'].shape
-            output['score'] = output['score'].permute((0, 2, 1)).reshape((s[0] * s[2], -1))
-            data_input['label'] = data_input['label'].reshape((-1,))
-            evaluation = metric.evaluate(cfg['metric_name']['test']['Local'], data_input, output)
-            results.append((evaluation, input_size))
+            print(evaluation.size())
+            print(evaluation.size)
         return results

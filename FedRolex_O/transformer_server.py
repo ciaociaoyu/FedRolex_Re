@@ -154,10 +154,9 @@ class TransformerServerRoll:
         updated_parameters = copy.deepcopy(self.global_parameters)
         tmp_counts_cpy = copy.deepcopy(self.tmp_counts)
         for k, v in updated_parameters.items():
-            tmp_v = v.new_zeros(v.size(), dtype=torch.float32)
             parameter_type = k.split('.')[-1]
-            count[k] = v.new_zeros(v.size(), dtype=torch.float32)
-            tmp_v = v.new_zeros(v.size(), dtype=torch.float32)
+            count[k] = v.new_zeros(v.size(), dtype=torch.float32, device='cpu')
+            tmp_v = v.new_zeros(v.size(), dtype=torch.float32, device='cpu')
             for m in range(len(local_parameters)):
                 if 'weight' in parameter_type or 'bias' in parameter_type:
                     if 'weight' in parameter_type:
@@ -193,6 +192,8 @@ class TransformerServerRoll:
                     tmp_v += local_parameters[m][k]
                     count[k] += 1
             tmp_v[count[k] > 0] = tmp_v[count[k] > 0].div_(count[k][count[k] > 0])
+            device = v.device
+            tmp_v = tmp_v.to(device)
             v[count[k] > 0] = tmp_v[count[k] > 0].to(v.dtype)
             self.tmp_counts = tmp_counts_cpy
         # delta_t = {k: v - self.global_parameters[k] for k, v in updated_parameters.items()}
@@ -214,7 +215,7 @@ class TransformerServerRoll:
         #     for k in self.global_parameters.keys()
         # }
         #
-        # # self.global_parameters = updated_parameters
+        self.global_parameters = updated_parameters
         self.global_model.load_state_dict(self.global_parameters)
         return
 

@@ -235,7 +235,7 @@ def process_control():
         cfg['weight_decay'] = 5e-4
         cfg['scheduler_name'] = 'MultiStepLR'
         cfg['factor'] = 0.1
-        cfg['bptt'] = 16
+        cfg['bptt'] = 64
         cfg['mask_rate'] = 0.15
         cfg['batch_size'] = {'train': 100, 'test': 10}
         if cfg['data_split_mode'] == 'iid':

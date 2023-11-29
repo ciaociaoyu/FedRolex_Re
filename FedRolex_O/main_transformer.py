@@ -63,8 +63,8 @@ cfg['control_name'] = '_'.join([cfg['control'][k] for k in cfg['control']])
 cfg['pivot_metric'] = 'Global-Perplexity'
 cfg['pivot'] = float('inf')
 cfg['metric_name'] = {'train': {'Local': ['Local-Loss', 'Local-Perplexity']},
-                      'test': {'Global': ['Global-Loss', 'Global-Accuracy'],
-                               'Local': ['Local-Loss', 'Local-Accuracy']}}
+                      'test': {'Global': ['Global-Loss', 'Global-Perplexity'],
+                               'Local': ['Local-Loss', 'Local-Perplexity']}}
 # ray.init(_temp_dir='/egr/research-zhanglambda/samiul/tmp')
 # ray.init(_temp_dir='/localscratch/alamsami/tmp', object_store_memory=10**11)
 
@@ -140,13 +140,14 @@ def run_experiment():
         t2 = time.time()
         server.step(local_parameters, param_idx, user_idx)
         t3 = time.time()
-
+        
         global_model = server.global_model
         test_model = global_model
         t4 = time.time()
         if True or epoch % 20 == 1:
-            test(dataset['test'], test_model, logger, epoch)
+            test(dataset['test'], test_model, logger, epoch, local)
         t5 = time.time()
+        # hhhhhhhh, 23333333333
         logger.safe(False)
         model_state_dict = global_model.state_dict()
         if epoch % 20 == 1:
@@ -172,17 +173,22 @@ def run_experiment():
         global_model = None
         model_state_dict = None
         torch.cuda.empty_cache()
+        # hhhhhhhh, 23333333333
     logger.safe(False)
     [ray.kill(client) for client in local]
     return
 
 
-def test(dataset, model, logger, epoch):
+def test(dataset, model, logger, epoch, local):
     with torch.no_grad():
         metric = Metric()
         model.train(False)
         model = model.to('cuda')
         batch_dataset = BatchDataset(dataset, cfg['bptt'])
+        if epoch % 10 == 0:
+            for k in range(len(local)):
+                local[k].test_model_for_user.remote(user_idx[k], batch_dataset)
+
         for i, input in enumerate(batch_dataset):
             input_size = input['label'].size(0)
             input = to_device(input, 'cuda')

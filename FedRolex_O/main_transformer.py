@@ -144,8 +144,8 @@ def run_experiment():
         global_model = server.global_model
         test_model = global_model
         t4 = time.time()
-        if True or epoch % 20 == 1:
-            test(dataset['test'], test_model, logger, epoch, local)
+        if True or epoch % 10 == 1:
+            test(dataset['test'], test_model, logger, epoch, local, user_idx)
         t5 = time.time()
         # hhhhhhhh, 23333333333
         logger.safe(False)
@@ -179,7 +179,7 @@ def run_experiment():
     return
 
 
-def test(dataset, model, logger, epoch, local):
+def test(dataset, model, logger, epoch, local, user_idx):
     with torch.no_grad():
         metric = Metric()
         model.train(False)
@@ -187,7 +187,7 @@ def test(dataset, model, logger, epoch, local):
         batch_dataset = BatchDataset(dataset, cfg['bptt'])
         if epoch % 10 == 0:
             for k in range(len(local)):
-                local[k].test_model_for_user.remote(user_idx[k], batch_dataset)
+                local[k].test_model_for_user.remote(user_idx[k], batch_dataset, epoch)
 
         for i, input in enumerate(batch_dataset):
             input_size = input['label'].size(0)

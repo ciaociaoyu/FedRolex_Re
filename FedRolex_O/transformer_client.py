@@ -55,7 +55,7 @@ class TransformerClient:
 
     def step(self, m, num_active_users, start_time):
         cfg = self.cfg
-        print(cfg['bptt'])
+        # print(cfg['bptt'])
         self.model = transformer.transformer(model_rate=self.model_rate, cfg=self.cfg).cpu()
 
         self.model.load_state_dict(self.local_parameters)
@@ -83,8 +83,6 @@ class TransformerClient:
 
     def pull(self):
         model_state = {k: v.detach().clone() for k, v in self.model.cpu().state_dict().items()}
-        self.model = None
-        self.local_parameters = None
         return model_state
 
     def log(self, epoch, cfg):
@@ -103,7 +101,7 @@ class TransformerClient:
             self.logger.append(info, 'train', mean=False)
             self.logger.write('train', cfg['metric_name']['train']['Local'])
 
-    def test_model_for_user(self, m, batch_dataset):
+    def test_model_for_user(self, m, batch_dataset, epoch):
         with torch.no_grad():
             cfg = self.cfg
             metric = Metric()
@@ -119,8 +117,8 @@ class TransformerClient:
             print("--------------")
             print("这是客户端{}的精度，使用全体测试集".format(m))
             print("模型rate：{}".format(self.model_rate))
+            print("epoch：{}".format(epoch))
             print("--------------")
+            print(evaluation['Global-Perplexity'])
+        return
 
-            print(evaluation.size())
-            print(evaluation.size)
-        return results

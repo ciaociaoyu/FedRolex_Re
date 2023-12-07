@@ -48,7 +48,6 @@ class TransformerClient:
         self.model_rate = model_ref['model_rate']
         cfg = self.cfg
         self.dataset = BatchDataset(dataset, cfg['bptt'])
-
         self.label_split = label_split
         self.lr = model_ref['lr']
         self.metric = Metric()
@@ -105,20 +104,28 @@ class TransformerClient:
         with torch.no_grad():
             cfg = self.cfg
             metric = Metric()
-            model = self.model
-            model.train(False)
+            model = transformer.transformer(model_rate=self.model_rate, cfg=cfg).cpu()
+            model.load_state_dict(self.local_parameters)
             model = model.to('cuda')
+            model.train(False)
+            count = 0
+            mean = 0
             for i, input in enumerate(batch_dataset):
                 input_size = input['label'].size(0)
                 input = to_device(input, 'cuda')
                 output = model(input)
                 output['loss'] = output['loss'].mean() if cfg['world_size'] > 1 else output['loss']
                 evaluation = metric.evaluate(cfg['metric_name']['test']['Global'], input, output)
+                mean += float(evaluation['Global-Loss'])
+                count += 1
             print("--------------")
             print("这是客户端{}的精度，使用全体测试集".format(m))
             print("模型rate：{}".format(self.model_rate))
             print("epoch：{}".format(epoch))
             print("--------------")
-            print(evaluation['Global-Perplexity'])
+            if count == 0:
+                print("error count = 0")
+            else:
+                print("Perplexity：{}".format(mean/count))
         return
 

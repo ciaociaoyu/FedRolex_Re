@@ -129,6 +129,11 @@ def run_experiment():
         scheduler.step()
         lr = optimizer.param_groups[0]['lr']
         local, param_idx, user_idx = server.broadcast(local, lr)
+        global_model = server.global_model
+        test_model = global_model
+
+        if True or epoch % 10 == 1:
+            test(dataset['test'], test_model, logger, epoch, local, user_idx)
         t1 = time.time()
 
         start_time = time.time()
@@ -141,11 +146,7 @@ def run_experiment():
         server.step(local_parameters, param_idx, user_idx)
         t3 = time.time()
         
-        global_model = server.global_model
-        test_model = global_model
         t4 = time.time()
-        if True or epoch % 10 == 1:
-            test(dataset['test'], test_model, logger, epoch, local, user_idx)
         t5 = time.time()
         # hhhhhhhh, 23333333333
         logger.safe(False)
@@ -162,12 +163,7 @@ def run_experiment():
                         './output/model/{}_best.pt'.format(cfg['model_tag']))
         logger.reset()
         t6 = time.time()
-        print(f'Broadcast Time      : {datetime.timedelta(seconds=t1 - t0)}')
-        print(f'Client Step Time    : {datetime.timedelta(seconds=t2 - t1)}')
-        print(f'Server Step Time    : {datetime.timedelta(seconds=t3 - t2)}')
-        print(f'Stats Time          : {datetime.timedelta(seconds=t4 - t3)}')
-        print(f'Test Time           : {datetime.timedelta(seconds=t5 - t4)}')
-        print(f'Output Copy Time    : {datetime.timedelta(seconds=t6 - t5)}')
+
         print(f'<<Total epoch Time>>: {datetime.timedelta(seconds=t6 - t0)}')
         test_model = None
         global_model = None

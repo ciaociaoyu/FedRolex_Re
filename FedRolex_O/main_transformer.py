@@ -43,7 +43,7 @@ parser.add_argument('--schedule', default=None, nargs='+', type=int)
 args = vars(parser.parse_args())
 cfg['init_seed'] = int(args['seed'])
 if args['algo'] == 'roll':
-    from transformer_server import TransformerServerRollSO as Server
+    from transformer_server import TransformerServerRoll as Server
 elif args['algo'] == 'random':
     from transformer_server import TransformerServerRandomSO as Server
 elif args['algo'] == 'static':

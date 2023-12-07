@@ -22,7 +22,7 @@ class TransformerServerRoll:
         self.global_model = global_model
         self.global_parameters = global_model.cpu().state_dict()
         self.rate = rate
-        self.label_split = dataset_ref
+        self.label_split = ray.get(dataset_ref['label_split'])
         self.make_model_rate()
         self.num_model_partitions = 50
         self.model_idxs = {}
@@ -30,27 +30,28 @@ class TransformerServerRoll:
         self.tmp_counts = {}
         print("server initialized")
 
-    def step(self, local_parameters):
-        self.combine(local_parameters, self.param_idx, self.user_idx)
+    def step(self, local_parameters, param_idx, user_idx):
+        self.combine(local_parameters, param_idx, user_idx)
         self.rounds += 1
 
     def broadcast(self, local, lr):
         cfg = self.cfg
         self.global_model.train(True)
-        num_active_users = int(np.ceil(cfg['frac'] * cfg['num_users']))
+        num_active_users = cfg['active_user']
         self.user_idx = copy.deepcopy(torch.arange(cfg['num_users'])
                                       [torch.randperm(cfg['num_users'])
             [:num_active_users]].tolist())
         local_parameters, self.param_idx = self.distribute(self.user_idx)
 
         param_ids = [ray.put(local_parameter) for local_parameter in local_parameters]
-        ray.get([client.update(self.user_idx[m],
-                               self.dataset_ref,
-                               {'lr': lr,
-                                'model_rate': self.model_rate[self.user_idx[m]],
-                                'local_params': param_ids[m]})
+
+        ray.get([client.update.remote(self.user_idx[m],
+                                      self.dataset_ref,
+                                      {'lr': lr,
+                                       'model_rate': self.model_rate[self.user_idx[m]],
+                                       'local_params': param_ids[m]})
                  for m, client in enumerate(local)])
-        return local
+        return local, self.param_idx, self.user_idx
 
     def make_model_rate(self):
         cfg = self.cfg
@@ -153,10 +154,9 @@ class TransformerServerRoll:
         updated_parameters = copy.deepcopy(self.global_parameters)
         tmp_counts_cpy = copy.deepcopy(self.tmp_counts)
         for k, v in updated_parameters.items():
-            tmp_v = v.new_zeros(v.size(), dtype=torch.float32)
             parameter_type = k.split('.')[-1]
-            count[k] = v.new_zeros(v.size(), dtype=torch.float32)
-            tmp_v = v.new_zeros(v.size(), dtype=torch.float32)
+            count[k] = v.new_zeros(v.size(), dtype=torch.float32, device='cpu')
+            tmp_v = v.new_zeros(v.size(), dtype=torch.float32, device='cpu')
             for m in range(len(local_parameters)):
                 if 'weight' in parameter_type or 'bias' in parameter_type:
                     if 'weight' in parameter_type:
@@ -192,6 +192,8 @@ class TransformerServerRoll:
                     tmp_v += local_parameters[m][k]
                     count[k] += 1
             tmp_v[count[k] > 0] = tmp_v[count[k] > 0].div_(count[k][count[k] > 0])
+            device = v.device
+            tmp_v = tmp_v.to(device)
             v[count[k] > 0] = tmp_v[count[k] > 0].to(v.dtype)
             self.tmp_counts = tmp_counts_cpy
         # delta_t = {k: v - self.global_parameters[k] for k, v in updated_parameters.items()}
@@ -213,7 +215,7 @@ class TransformerServerRoll:
         #     for k in self.global_parameters.keys()
         # }
         #
-        # # self.global_parameters = updated_parameters
+        self.global_parameters = updated_parameters
         self.global_model.load_state_dict(self.global_parameters)
         return
 
@@ -238,7 +240,7 @@ class TransformerServerRollSO(TransformerServerRoll):
         return local, configs
 
 
-class TransformerServerRandomSO(TransformerServerRollSO):
+class TransformerServerRandomSO(TransformerServerRoll):
     def split_model(self, user_idx):
         cfg = self.cfg
         idx_i = [None for _ in range(len(user_idx))]
@@ -300,7 +302,7 @@ class TransformerServerRandomSO(TransformerServerRollSO):
         return idx
 
 
-class TransformerServerStaticSO(TransformerServerRollSO):
+class TransformerServerStaticSO(TransformerServerRoll):
     def split_model(self, user_idx):
         cfg = self.cfg
         idx_i = [None for _ in range(len(user_idx))]

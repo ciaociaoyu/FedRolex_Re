@@ -6,13 +6,14 @@ import ray
 import torch
 
 import models
-from datasets.lm import StackOverflowClientDataset
+from models import transformer
+from data import BatchDataset, SplitDataset, make_data_loader
 from logger import Logger
 from metrics import Metric
 from utils import make_optimizer, to_device
 
 
-@ray.remote(num_gpus=0.8)
+@ray.remote(num_gpus=0.15)
 class TransformerClient:
     def __init__(self, log_path, cfg):
         self.dataset = None
@@ -33,22 +34,31 @@ class TransformerClient:
         self.cfg = cfg
 
     def update(self, client_id, dataset_ref, model_ref):
-        dataset = dataset_ref
-        label_split = dataset_ref
-        local_parameters = model_ref['local_params']
-        self.dataset = StackOverflowClientDataset(dataset, self.cfg['seq_length'], self.cfg['batch_size']['train'])
-        self.local_parameters = copy.deepcopy(local_parameters)
+        dataset = ray.get(dataset_ref['dataset'])
+        data_split = ray.get(dataset_ref['split'])
+        label_split = ray.get(dataset_ref['label_split'])
+        local_parameters = ray.get(model_ref['local_params'])
+        # dataset_ref = torch.load('data_store')
+        # dataset = (dataset_ref['dataset'])
+        # data_split = (dataset_ref['split'])
+        # label_split = (dataset_ref['label_split'])
+        # local_parameters = {k: v.clone().cuda() for k, v in local_parameters.items()}
+        self.local_parameters = local_parameters
         self.client_id = client_id
         self.model_rate = model_ref['model_rate']
+        cfg = self.cfg
+        self.dataset = BatchDataset(dataset, cfg['bptt'])
         self.label_split = label_split
         self.lr = model_ref['lr']
         self.metric = Metric()
 
     def step(self, m, num_active_users, start_time):
         cfg = self.cfg
-        self.model = models.transformer_nwp(model_rate=self.model_rate, cfg=self.cfg).cpu()
+        # print(cfg['bptt'])
+        self.model = transformer.transformer(model_rate=self.model_rate, cfg=self.cfg).cpu()
+
         self.model.load_state_dict(self.local_parameters)
-        self.model = self.model.cuda()
+        self.model = self.model.to('cuda')
         self.model.train(True)
         self.optimizer = make_optimizer(self.model, self.lr)
         self.m = m
@@ -58,7 +68,8 @@ class TransformerClient:
             for i, step_input in enumerate(self.dataset):
                 input_size = step_input['label'].size(0)
                 # step_input['label_split'] = None
-                step_input = to_device(step_input, cfg['device'])
+                step_input['label_split'] = torch.tensor(self.label_split[self.client_id])
+                step_input = to_device(step_input, 'cuda')
                 self.optimizer.zero_grad()
                 output = self.model(step_input)
                 output['loss'].backward()
@@ -71,8 +82,6 @@ class TransformerClient:
 
     def pull(self):
         model_state = {k: v.detach().clone() for k, v in self.model.cpu().state_dict().items()}
-        self.model = None
-        self.local_parameters = None
         return model_state
 
     def log(self, epoch, cfg):
@@ -91,21 +100,35 @@ class TransformerClient:
             self.logger.append(info, 'train', mean=False)
             self.logger.write('train', cfg['metric_name']['train']['Local'])
 
-    def test_model_for_user(self, m, ids):
-        cfg = self.cfg
-        metric = Metric()
-        [dataset, model] = ray.get(ids)
-        dataset = StackOverflowClientDataset(dataset, self.cfg['seq_length'], self.cfg['batch_size']['test'])
-        model = model.to('cuda')
-        results = []
-        for _, data_input in enumerate(dataset):
-            input_size = data_input['label'].size(0)
-            data_input = to_device(data_input, 'cuda')
-            output = model(data_input)
-            output['loss'] = output['loss'].mean() if cfg['world_size'] > 1 else output['loss']
-            s = output['score'].shape
-            output['score'] = output['score'].permute((0, 2, 1)).reshape((s[0] * s[2], -1))
-            data_input['label'] = data_input['label'].reshape((-1,))
-            evaluation = metric.evaluate(cfg['metric_name']['test']['Local'], data_input, output)
-            results.append((evaluation, input_size))
-        return results
+    def test_model_for_user(self, m, batch_dataset, epoch):
+        with torch.no_grad():
+            cfg = self.cfg
+            metric = Metric()
+            model = transformer.transformer(model_rate=self.model_rate, cfg=cfg).cpu()
+            model.load_state_dict(self.local_parameters)
+            model = model.to('cuda')
+            model.train(False)
+            count = 0
+            mean_loss = 0
+            mean_Perplexity = 0
+            for i, input in enumerate(batch_dataset):
+                input_size = input['label'].size(0)
+                input = to_device(input, 'cuda')
+                output = model(input)
+                output['loss'] = output['loss'].mean() if cfg['world_size'] > 1 else output['loss']
+                evaluation = metric.evaluate(cfg['metric_name']['test']['Global'], input, output)
+                mean_loss += float(evaluation['Global-Loss'])
+                mean_Perplexity += float(evaluation['Global-Perplexity'])
+                count += 1
+            print("--------------")
+            print("这是客户端{}的精度，使用全体测试集".format(m))
+            print("模型rate：{}".format(self.model_rate))
+            print("epoch：{}".format(epoch))
+            print("--------------")
+            if count == 0:
+                print("error count = 0")
+            else:
+                print("Loss：{}".format(mean_loss / count))
+                print("Perplexity：{}".format(mean_Perplexity / count))
+        return
+

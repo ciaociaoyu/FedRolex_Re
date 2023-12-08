@@ -88,7 +88,6 @@ class TransformerServerRoll:
                         idx[k] = input_idx_i_m
             else:
                 pass
-        self.make_model_rate()
         param_idx = idx
         local_parameters = {}
         for k, v in self.global_parameters.items():
@@ -169,6 +168,7 @@ class TransformerServerRoll:
                 else:
                     # 分配力所能及的
                     scaler_rate = self.model_rate[self.user_idx[m]]
+                self.model_rate[self.user_idx[m]] = scaler_rate
                 if 'weight' in parameter_type or 'bias' in parameter_type:
                     if 'weight' in parameter_type:
                         if v.dim() > 1:

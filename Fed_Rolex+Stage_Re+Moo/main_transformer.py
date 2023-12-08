@@ -35,6 +35,7 @@ parser.add_argument('--control_name', default=None, type=str)
 parser.add_argument('--seed', default=None, type=int)
 parser.add_argument('--devices', default=None, nargs='+', type=int)
 parser.add_argument('--algo', default='roll', type=str)
+parser.add_argument('--interpolate', default=None, type=str)
 # parser.add_argument('--lr', default=None, type=int)
 parser.add_argument('--g_epochs', default=None, type=int)
 parser.add_argument('--l_epochs', default=None, type=int)
@@ -62,6 +63,7 @@ if args['control_name']:
 cfg['control_name'] = '_'.join([cfg['control'][k] for k in cfg['control']])
 cfg['pivot_metric'] = 'Global-Perplexity'
 cfg['pivot'] = float('inf')
+cfg['interpolate'] = args['interpolate']
 cfg['metric_name'] = {'train': {'Local': ['Local-Loss', 'Local-Perplexity']},
                       'test': {'Global': ['Global-Loss', 'Global-Perplexity'],
                                'Local': ['Local-Loss', 'Local-Perplexity']}}
@@ -130,7 +132,11 @@ def run_experiment():
         lr = optimizer.param_groups[0]['lr']
         local, param_idx, user_idx = server.broadcast(local, lr)
         global_model = server.global_model
-        test_model = global_model
+        stage = epoch // 40
+        test_rate = 2 ** stage * 0.0625
+        test_model_dict = server.generate_model_for_test(test_rate)
+        test_model = transformer.transformer(model_rate=test_rate, cfg=cfg).cpu()
+        test_model.load_state_dict(test_model_dict)
 
         if True or epoch % 10 == 1:
             test(dataset['test'], test_model, logger, epoch, local, user_idx)

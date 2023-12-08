@@ -103,7 +103,7 @@ class TransformerServerRoll:
                     local_parameters[k] = copy.deepcopy(v[param_idx[k]])
             else:
                 local_parameters[k] = copy.deepcopy(v)
-        return idx
+        return local_parameters
 
     def step(self, local_parameters, param_idx, user_idx):
         self.combine(local_parameters, param_idx, user_idx)

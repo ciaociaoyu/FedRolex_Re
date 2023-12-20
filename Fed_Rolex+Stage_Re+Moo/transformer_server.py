@@ -34,76 +34,6 @@ class TransformerServerRoll:
         self.b_rate = 0
         print("server initialized")
 
-    def generate_model_for_test(self, scaler_rate):
-        # 产生一个特定比率的模型
-        cfg = self.cfg
-        idx_i = None
-        idx = {}
-        for k, v in self.global_parameters.items():
-            parameter_type = k.split('.')[-1]
-            if 'weight' in parameter_type or 'bias' in parameter_type:
-                if 'weight' in parameter_type:
-                    if v.dim() > 1:
-                        input_size = v.size(1)
-                        output_size = v.size(0)
-                        if 'embedding' in k.split('.')[-2]:
-                            output_idx_i_m = torch.arange(output_size, device=v.device)
-                            local_input_size = int(np.ceil(input_size * scaler_rate))
-                            ridx = torch.arange(input_size, device=v.device)
-                            input_idx_i_m = ridx[:local_input_size]
-                            idx_i = input_idx_i_m
-                        elif 'decoder' in k and 'linear2' in k:
-                            input_idx_i_m = idx_i
-                            output_idx_i_m = torch.arange(output_size, device=v.device)
-                        elif 'linear_q' in k or 'linear_k' in k or 'linear_v' in k:
-                            input_idx_i_m = idx_i
-                            local_output_size = int(np.ceil(output_size // cfg['transformer']['num_heads']
-                                                            * scaler_rate))
-                            ridx = torch.arange(output_size, device=v.device)
-                            output_idx_i_m = (ridx.reshape(
-                                cfg['transformer']['num_heads'], -1))[:, :local_output_size].reshape(-1)
-                            idx_i = output_idx_i_m
-                        else:
-                            input_idx_i_m = idx_i
-                            local_output_size = int(np.ceil(output_size * scaler_rate))
-                            ridx = torch.arange(output_size, device=v.device)
-                            output_idx_i_m = ridx[:local_output_size]
-                            idx_i = output_idx_i_m
-                        idx[k] = (output_idx_i_m, input_idx_i_m)
-                    else:
-                        input_idx_i_m = idx_i
-                        idx[k] = input_idx_i_m
-                else:
-                    input_size = v.size(0)
-                    if 'decoder' in k and 'linear2' in k:
-                        input_idx_i_m = torch.arange(input_size, device=v.device)
-                        idx[k] = input_idx_i_m
-                    elif 'linear_q' in k or 'linear_k' in k or 'linear_v' in k:
-                        input_idx_i_m = idx_i
-                        idx[k] = input_idx_i_m
-                        if 'linear_v' not in k:
-                            idx_i = idx[k.replace('bias', 'weight')][1]
-                    else:
-                        input_idx_i_m = idx_i
-                        idx[k] = input_idx_i_m
-            else:
-                pass
-        param_idx = idx
-        local_parameters = {}
-        for k, v in self.global_parameters.items():
-            parameter_type = k.split('.')[-1]
-            if 'weight' in parameter_type or 'bias' in parameter_type:
-                if 'weight' in parameter_type:
-                    if v.dim() > 1:
-                        local_parameters[k] = copy.deepcopy(v[torch.meshgrid(param_idx[k])])
-                    else:
-                        local_parameters[k] = copy.deepcopy(v[param_idx[k]])
-                else:
-                    local_parameters[k] = copy.deepcopy(v[param_idx[k]])
-            else:
-                local_parameters[k] = copy.deepcopy(v)
-        return local_parameters
-
     def step(self, local_parameters, param_idx, user_idx):
         self.combine(local_parameters, param_idx, user_idx)
         self.rounds += 1
@@ -115,7 +45,9 @@ class TransformerServerRoll:
             if self.rounds % 40 == 0:
                 # 扩展模型
                 if cfg['interpolate'] == 'bi':
-                    self.model_scaler_rate(2 ** (self.stage - 1) * 0.0625, 2 ** (self.stage) * 0.0625)
+                    self.cfg['global_model_rate'] = 2 ** (self.stage) * 0.0625
+                    cfg = self.cfg
+                    self.model_scaler_rate(self.cfg['global_model_rate'])
 
         self.global_model.train(True)
         num_active_users = cfg['active_user']
@@ -164,11 +96,13 @@ class TransformerServerRoll:
             for m in range(len(user_idx)):
                 if self.model_rate[self.user_idx[m]] > self.b_rate:
                     # 啥都不做，正常分配
-                    scaler_rate = self.b_rate
-                else:
+                    self.model_rate[self.user_idx[m]] = self.b_rate
+                # else:
                     # 分配力所能及的
-                    scaler_rate = self.model_rate[self.user_idx[m]]
-                self.model_rate[self.user_idx[m]] = scaler_rate
+                    # self.model_rate[self.user_idx[m]] = self.model_rate[self.user_idx[m]]
+                scaler_rate = self.model_rate[user_idx[m]] / cfg['global_model_rate']
+                # global_model_rate动态变化，所以scaler_rate也需要动态变化
+
                 if 'weight' in parameter_type or 'bias' in parameter_type:
                     if 'weight' in parameter_type:
                         if v.dim() > 1:
@@ -218,68 +152,19 @@ class TransformerServerRoll:
                     pass
         return idx
 
-    def model_scaler_rate(self, scaler_rate1, scaler_rate2):
+    def model_scaler_rate(self, scaler_rate_temp):
+        # 这个函数把全局模型扩张到scaler_rate_temp
+        # scaler_rate_temp是新的全局模型比率
         cfg = self.cfg
-        idx_i = [None for _ in range(2)]
-        idx = [OrderedDict() for _ in range(2)]
-        for k, v in self.global_parameters.items():
-            parameter_type = k.split('.')[-1]
-            for m in range(2):
-                if m == 0:
-                    scaler_rate = scaler_rate1
-                else:
-                    scaler_rate = scaler_rate2
-                if 'weight' in parameter_type or 'bias' in parameter_type:
-                    if 'weight' in parameter_type:
-                        if v.dim() > 1:
-                            input_size = v.size(1)
-                            output_size = v.size(0)
-                            if 'embedding' in k.split('.')[-2]:
-                                output_idx_i_m = torch.arange(output_size, device=v.device)
-                                local_input_size = int(np.ceil(input_size * scaler_rate))
-                                ridx = torch.arange(input_size, device=v.device)
-                                input_idx_i_m = ridx[:local_input_size]
-                                idx_i[m] = input_idx_i_m
-                            elif 'decoder' in k and 'linear2' in k:
-                                input_idx_i_m = idx_i[m]
-                                output_idx_i_m = torch.arange(output_size, device=v.device)
-                            elif 'linear_q' in k or 'linear_k' in k or 'linear_v' in k:
-                                input_idx_i_m = idx_i[m]
-                                local_output_size = int(np.ceil(output_size // cfg['transformer']['num_heads']
-                                                                * scaler_rate))
-                                ridx = torch.arange(output_size, device=v.device)
-                                output_idx_i_m = (ridx.reshape(
-                                    cfg['transformer']['num_heads'], -1))[:, :local_output_size].reshape(-1)
-                                idx_i[m] = output_idx_i_m
-                            else:
-                                input_idx_i_m = idx_i[m]
-                                local_output_size = int(np.ceil(output_size * scaler_rate))
-                                ridx = torch.arange(output_size, device=v.device)
-                                output_idx_i_m = ridx[:local_output_size]
-                                idx_i[m] = output_idx_i_m
-                            idx[m][k] = (output_idx_i_m, input_idx_i_m)
-                        else:
-                            input_idx_i_m = idx_i[m]
-                            idx[m][k] = input_idx_i_m
-                    else:
-                        input_size = v.size(0)
-                        if 'decoder' in k and 'linear2' in k:
-                            input_idx_i_m = torch.arange(input_size, device=v.device)
-                            idx[m][k] = input_idx_i_m
-                        elif 'linear_q' in k or 'linear_k' in k or 'linear_v' in k:
-                            input_idx_i_m = idx_i[m]
-                            idx[m][k] = input_idx_i_m
-                            if 'linear_v' not in k:
-                                idx_i[m] = idx[m][k.replace('bias', 'weight')][1]
-                        else:
-                            input_idx_i_m = idx_i[m]
-                            idx[m][k] = input_idx_i_m
-                else:
-                    pass
-        for k, v in self.global_parameters.items():
-            tmp_v = self.interpolate_tensor(v[torch.meshgrid(idx[0][k])], v[torch.meshgrid(idx[1][k])].size())
-            v[torch.meshgrid(idx[1][k])] = tmp_v
-            self.global_parameters[k] = v
+        # 创建一个新的全局模型
+        global_model_temp = transformer.transformer(model_rate=scaler_rate_temp, cfg=cfg)
+        for k, v in global_model_temp.items():
+            # 这里把（原始大模型的的一个tensor），插值放到新的模型中（扩张后的）
+            tmp_v = self.interpolate_tensor(self.global_parameters[k], v)
+            v = tmp_v
+            global_model_temp[k] = v
+        # 更换全局模型
+        self.global_parameters = global_model_temp
         return
 
     def interpolate_tensor(self, input_tensor, output_shape):

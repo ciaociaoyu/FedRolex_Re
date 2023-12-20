@@ -102,6 +102,8 @@ def run_experiment():
     os.environ['PYTHONHASHSEED'] = str(seed)
     dataset = fetch_dataset(cfg['data_name'], cfg['subset'])
     process_dataset(dataset)
+    # 改一下全局模型比率，从最小的开始
+    cfg["global_model_rate"] = 0.0625
     global_model = transformer.transformer(model_rate=cfg["global_model_rate"], cfg=cfg)
     optimizer = make_optimizer(global_model, cfg['lr'])
     scheduler = make_scheduler(optimizer)
@@ -132,12 +134,7 @@ def run_experiment():
         lr = optimizer.param_groups[0]['lr']
         local, param_idx, user_idx = server.broadcast(local, lr)
         global_model = server.global_model
-        stage = epoch // 40
-        test_rate = 2 ** stage * 0.0625
-        test_model_dict = server.generate_model_for_test(test_rate)
-        test_model = transformer.transformer(model_rate=test_rate, cfg=cfg).cpu()
-        test_model.load_state_dict(test_model_dict)
-
+        test_model = global_model
         if True or epoch % 10 == 1:
             test(dataset['test'], test_model, logger, epoch, local, user_idx)
         t1 = time.time()
@@ -187,9 +184,10 @@ def test(dataset, model, logger, epoch, local, user_idx):
         model.train(False)
         model = model.to('cuda')
         batch_dataset = BatchDataset(dataset, cfg['bptt'])
-        if epoch % 10 == 0:
-            for k in range(len(local)):
-                local[k].test_model_for_user.remote(user_idx[k], batch_dataset, epoch)
+        # if epoch % 10 == 0:
+            # 应该不用去专门测试每个小模型了，因为全局模型的比率就是测试的比率
+        #     for k in range(len(local)):
+        #         local[k].test_model_for_user.remote(user_idx[k], batch_dataset, epoch)
 
         for i, input in enumerate(batch_dataset):
             input_size = input['label'].size(0)

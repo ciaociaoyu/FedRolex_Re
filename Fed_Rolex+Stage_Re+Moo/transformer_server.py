@@ -1,6 +1,6 @@
 import copy
 from collections import OrderedDict
-
+from models import transformer
 import numpy as np
 import ray
 import torch

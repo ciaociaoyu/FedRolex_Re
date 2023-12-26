@@ -40,9 +40,9 @@ class TransformerServerRoll:
 
     def broadcast(self, local, lr):
         cfg = self.cfg
-        self.stage = self.rounds // 5
+        self.stage = self.rounds // 3
         if 2 < self.rounds < 200:
-            if self.rounds % 40 == 0:
+            if self.rounds % 3 == 0:
                 # 扩展模型
                 if cfg['interpolate'] == 'bi':
                     self.cfg['global_model_rate'] = 2 ** (self.stage) * 0.0625
@@ -158,14 +158,18 @@ class TransformerServerRoll:
         cfg = self.cfg
         # 创建一个新的全局模型
         global_model_temp = transformer.transformer(model_rate=scaler_rate_temp, cfg=cfg)
-        global_model_temp = global_model_temp.state_dict()
-        for k, v in global_model_temp.items():
+        global_model_temp_para = global_model_temp.state_dict()
+        for k, v in global_model_temp_para.items():
             # 这里把（原始大模型的的一个tensor），插值放到新的模型中（扩张后的）
             tmp_v = self.interpolate_tensor(self.global_parameters[k], v.size())
             v = tmp_v
-            global_model_temp[k] = v
+            global_model_temp_para[k] = v
         # 更换全局模型
-        self.global_parameters = global_model_temp
+        # 参数替换
+        self.global_parameters = global_model_temp_para
+        # 模型替换
+        self.global_model = global_model_temp
+        # 加载参数
         self.global_model.load_state_dict(self.global_parameters)
         return
 

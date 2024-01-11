@@ -32,7 +32,7 @@ for k in cfg:
     exec('parser.add_argument(\'--{0}\', default=cfg[\'{0}\'], type=type(cfg[\'{0}\']))'.format(k))
 parser.add_argument('--control_name', default=None, type=str)
 parser.add_argument('--interpolate', default=None, type=str)
-parser.add_argument('--aggregate', default=None, type=str)
+
 parser.add_argument('--seed', default=None, type=int)
 parser.add_argument('--devices', default=None, nargs='+', type=int)
 parser.add_argument('--algo', default='roll', type=str)
@@ -41,16 +41,14 @@ parser.add_argument('--weighting', default='avg', type=str)
 parser.add_argument('--g_epochs', default=None, type=int)
 parser.add_argument('--l_epochs', default=None, type=int)
 parser.add_argument('--overlap', default=None, type=float)
-parser.add_argument('--moo_restrain', default=None, type=float)
 parser.add_argument('--schedule', default=None, nargs='+', type=int)
-# parser.add_argument('--exp_name', default=None, type=str)
+
 args = vars(parser.parse_args())
 
-cfg['moo_restrain'] = args['moo_restrain']
 cfg['lr'] = int(args['lr'])
 cfg['overlap'] = args['overlap']
 cfg['interpolate'] = args['interpolate']
-cfg['aggregate'] = args['aggregate']
+
 cfg['weighting'] = args['weighting']
 cfg['init_seed'] = int(args['seed'])
 if args['algo'] == 'roll':
@@ -71,7 +69,6 @@ cfg['pivot_metric'] = 'Global-Accuracy'
 cfg['pivot'] = -float('inf')
 cfg['metric_name'] = {'train': {'Local': ['Local-Loss', 'Local-Accuracy']},
                       'test': {'Local': ['Local-Loss', 'Local-Accuracy'], 'Global': ['Global-Loss', 'Global-Accuracy']}}
-
 ray.init()
 rates = None
 
@@ -125,6 +122,7 @@ def run_experiment():
     server = Server(global_model, cfg['model_rate'], dataset_ref, cfg_id)
     local = [ResnetClient.remote(logger.log_path, [cfg_id]) for _ in range(num_active_users)]
     rates = server.model_rate
+    t_count = 0.0
     for epoch in range(last_epoch, cfg['num_epochs']['global'] + 1):
         t0 = time.time()
         logger.safe(True)
@@ -133,7 +131,7 @@ def run_experiment():
         # if epoch > 10:
         #     lr = 2e-4
         local, param_idx, user_idx = server.broadcast(local, lr)
-        stage = epoch // 600
+        stage = epoch // 300
         test_rate = 2 ** stage * 0.0625
         test_model_dict = server.generate_model_for_test(test_rate)
         test_model = resnet.resnet18(model_rate=test_rate, cfg=cfg).to('cuda')
@@ -149,18 +147,6 @@ def run_experiment():
 
         local_parameters = [v for _k, v in enumerate(dt)]
 
-        # for i, p in enumerate(local_parameters):
-        #     with open(f'local_param_pulled_{i}.pickle', 'w') as f:
-        #         pickle.dump(p, f)
-        # local_parameters = [{k: torch.tensor(v, device=cfg['device']) for k, v in p.items()} for p in local_parameters]
-        # for lp in local_parameters:
-        #     for k, p in lp.items():
-        #         print(k, torch.var_mean(p, unbiased=False))
-
-        # local_parameters = [None for _ in range(num_active_users)]
-        # for m in range(num_active_users):
-        #     local[m].step(m, num_active_users, start_time)
-        #     local_parameters[m] = local[m].pull()
         t2 = time.time()
         server.step(local_parameters, param_idx, user_idx)
         t3 = time.time()
@@ -184,8 +170,9 @@ def run_experiment():
                         './output/model/{}_best.pt'.format(cfg['model_tag']))
         logger.reset()
         t6 = time.time()
-
+        t_count = t_count + t6 - t0
         print(f'<<Total epoch Time>>: {datetime.timedelta(seconds=t6 - t0)}')
+        print(f'<<Total Experiment Time>>: {datetime.timedelta(seconds=t_count)}')
     logger.safe(False)
     [ray.kill(client) for client in local]
     return
@@ -211,8 +198,6 @@ def test(dataset, data_split, label_split, model, logger, epoch, local, user_idx
                 for r in result:
                     evaluation, input_size = r
                     logger.append(evaluation, 'test', input_size)
-        # Save all_res for plotting
-        # torch.save((all_res, rates), f'./output/runs/{cfg["model_tag"]}_real_world.pt')
         data_loader = make_data_loader({'test': dataset})['test']
         metric = Metric()
         model.cuda()

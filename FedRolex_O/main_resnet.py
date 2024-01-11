@@ -119,6 +119,7 @@ def run_experiment():
     server = Server(global_model, cfg['model_rate'], dataset_ref, cfg_id)
     local = [ResnetClient.remote(logger.log_path, [cfg_id]) for _ in range(num_active_users)]
     rates = server.model_rate
+    t_count = 0.0
     for epoch in range(last_epoch, cfg['num_epochs']['global'] + 1):
         t0 = time.time()
         logger.safe(True)
@@ -169,6 +170,8 @@ def run_experiment():
                         './output/model/{}_best.pt'.format(cfg['model_tag']))
         logger.reset()
         t6 = time.time()
+        t_count = t_count + t6 - t0
+
         print(f'Broadcast Time      : {datetime.timedelta(seconds=t1 - t0)}')
         print(f'Client Step Time    : {datetime.timedelta(seconds=t2 - t1)}')
         print(f'Server Step Time    : {datetime.timedelta(seconds=t3 - t2)}')
@@ -176,6 +179,7 @@ def run_experiment():
         print(f'Test Time           : {datetime.timedelta(seconds=t5 - t4)}')
         print(f'Output Copy Time    : {datetime.timedelta(seconds=t6 - t5)}')
         print(f'<<Total epoch Time>>: {datetime.timedelta(seconds=t6 - t0)}')
+        print(f'<<Total Experiment Time>>: {datetime.timedelta(seconds=t_count)}')
     logger.safe(False)
     [ray.kill(client) for client in local]
     return

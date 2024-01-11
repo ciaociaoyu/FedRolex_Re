@@ -1,6 +1,5 @@
 import copy
 from collections import OrderedDict
-from min_norm_solvers import MinNormSolver
 import numpy as np
 import ray
 import torch
@@ -116,13 +115,13 @@ class ResnetServerRoll:
 
     def broadcast(self, local, lr):
         cfg = self.cfg
-        self.stage = self.rounds // 600
+        self.stage = self.rounds // 300
         # if 1000 > self.rounds > 0:
         #     self.stage = 0
         # else:
         #     self.stage = (self.rounds - 1000) // 600 + 1
         if 100 < self.rounds < 2900:
-            if self.rounds % 600 == 0:
+            if self.rounds % 300 == 0:
                 # 扩展模型
                 if cfg['interpolate'] == 'bi':
                     self.model_scaler_rate(2 ** (self.stage - 1) * 0.0625, 2 ** (self.stage) * 0.0625)
@@ -346,130 +345,69 @@ class ResnetServerRoll:
     def combine(self, local_parameters, param_idx, user_idx):
         # 这个函数增加了MOO(多目标优化)相关的设置
         cfg = self.cfg
-        if cfg['aggregate'] == 'moo':
-            self.global_parameters = self.global_model.cpu().state_dict()
-            global_vector_tensor = self.convert12(self.global_parameters.items()).float()
-            local_parameters_vector_g = torch.zeros(cfg['num_users'], len(global_vector_tensor)).float()
-
+        count = OrderedDict()
+        self.global_parameters = self.global_model.cpu().state_dict()
+        updated_parameters = copy.deepcopy(self.global_parameters)
+        tmp_counts_cpy = copy.deepcopy(self.tmp_counts)
+        for k, v in updated_parameters.items():
+            parameter_type = k.split('.')[-1]
+            count[k] = v.new_zeros(v.size(), dtype=torch.float32, device='cpu')
+            tmp_v = v.new_zeros(v.size(), dtype=torch.float32, device='cpu')
             for m in range(len(local_parameters)):
-                local_parameters_gradient = copy.deepcopy(self.global_parameters)
-                for k, v in local_parameters_gradient.items():
-                    parameter_type = k.split('.')[-1]
-                    tmp_v = v.new_zeros(v.size(), dtype=torch.float32, device='cpu')
-                    if 'weight' in parameter_type or 'bias' in parameter_type:
-                        if parameter_type == 'weight':
-                            if v.dim() > 1:
-                                if 'linear' in k:
-                                    label_split = self.label_split[user_idx[m]]
-                                    param_idx[m][k] = list(param_idx[m][k])
-                                    param_idx[m][k][0] = param_idx[m][k][0][label_split]
-                                    tmp_v[torch.meshgrid(param_idx[m][k])] = local_parameters[m][k][label_split] - v[
-                                        torch.meshgrid(param_idx[m][k])]
-                                else:
-                                    tmp_v[torch.meshgrid(param_idx[m][k])] = local_parameters[m][k] - v[
-                                        torch.meshgrid(param_idx[m][k])]
-                            else:
-                                tmp_v[torch.meshgrid(param_idx[m][k])] = local_parameters[m][k] - v[
-                                    torch.meshgrid(param_idx[m][k])]
-                        else:
+                if 'weight' in parameter_type or 'bias' in parameter_type:
+                    if parameter_type == 'weight':
+                        if v.dim() > 1:
                             if 'linear' in k:
                                 label_split = self.label_split[user_idx[m]]
-                                param_idx[m][k] = param_idx[m][k][label_split]
-                                tmp_v[torch.meshgrid(param_idx[m][k])] = local_parameters[m][k][label_split] - v[
-                                    torch.meshgrid(param_idx[m][k])]
+                                param_idx[m][k] = list(param_idx[m][k])
+                                param_idx[m][k][0] = param_idx[m][k][0][label_split]
+                                tmp_v[torch.meshgrid(param_idx[m][k])] += self.tmp_counts[k][torch.meshgrid(
+                                    param_idx[m][k])] * local_parameters[m][k][label_split]
+                                count[k][torch.meshgrid(param_idx[m][k])] += self.tmp_counts[k][torch.meshgrid(
+                                    param_idx[m][k])]
+                                tmp_counts_cpy[k][torch.meshgrid(param_idx[m][k])] += 1
                             else:
-                                tmp_v[torch.meshgrid(param_idx[m][k])] = local_parameters[m][k] - v[
-                                    torch.meshgrid(param_idx[m][k])]
-                    else:
-                        tmp_v[torch.meshgrid(param_idx[m][k])] = local_parameters[m][k] - v[
-                            torch.meshgrid(param_idx[m][k])]
-                    local_parameters_gradient[k] = tmp_v
-                local_parameters_vector_g[m] = self.convert12(local_parameters_gradient.items()).float()
-            # print(local_parameters_vector_g)
-            sol, min_norm = MinNormSolver.find_min_norm_element(cfg,
-                                                                [local_parameters_vector_g[m] for m in
-                                                                 range(len(local_parameters))])
-            # sol = vector = np.full(10, 0.1)
-            # 得到每个客户端的系数
-            print(sol)
-            for m in range(len(local_parameters)):
-                global_vector_tensor = global_vector_tensor + torch.tensor(sol[m]) * local_parameters_vector_g[m]
-                global_vector_tensor = global_vector_tensor.float()
-                # 更新后的全局参数=系数*客户端梯度+全局参数
-
-            prev_ind = 0
-            for k, v in self.global_parameters.items():
-                # 更新到全局参数中（数据格式为model.state_dict()）
-                flat_size = int(np.prod(list(v.size())))
-                v.data.copy_(
-                    global_vector_tensor[prev_ind:prev_ind + flat_size].view(v.size()))
-                prev_ind += flat_size
-        elif cfg['aggregate'] == 'avg':
-            count = OrderedDict()
-            self.global_parameters = self.global_model.cpu().state_dict()
-            updated_parameters = copy.deepcopy(self.global_parameters)
-            tmp_counts_cpy = copy.deepcopy(self.tmp_counts)
-            for k, v in updated_parameters.items():
-                parameter_type = k.split('.')[-1]
-                count[k] = v.new_zeros(v.size(), dtype=torch.float32, device='cpu')
-                tmp_v = v.new_zeros(v.size(), dtype=torch.float32, device='cpu')
-                for m in range(len(local_parameters)):
-                    if 'weight' in parameter_type or 'bias' in parameter_type:
-                        if parameter_type == 'weight':
-                            if v.dim() > 1:
-                                if 'linear' in k:
-                                    label_split = self.label_split[user_idx[m]]
-                                    param_idx[m][k] = list(param_idx[m][k])
-                                    param_idx[m][k][0] = param_idx[m][k][0][label_split]
-                                    tmp_v[torch.meshgrid(param_idx[m][k])] += self.tmp_counts[k][torch.meshgrid(
-                                        param_idx[m][k])] * local_parameters[m][k][label_split]
-                                    count[k][torch.meshgrid(param_idx[m][k])] += self.tmp_counts[k][torch.meshgrid(
-                                        param_idx[m][k])]
-                                    tmp_counts_cpy[k][torch.meshgrid(param_idx[m][k])] += 1
-                                else:
-                                    output_size = v.size(0)
-                                    scaler_rate = self.model_rate[user_idx[m]] / self.cfg['global_model_rate']
-                                    local_output_size = int(np.ceil(output_size * scaler_rate))
-                                    if self.cfg['weighting'] == 'avg':
-                                        K = 1
-                                    elif self.cfg['weighting'] == 'width':
-                                        K = local_output_size
-                                    elif self.cfg['weighting'] == 'updates':
-                                        K = self.tmp_counts[k][torch.meshgrid(param_idx[m][k])]
-                                    elif self.cfg['weighting'] == 'updates_width':
-                                        K = local_output_size * self.tmp_counts[k][torch.meshgrid(param_idx[m][k])]
-                                    # K = self.tmp_counts[k][torch.meshgrid(param_idx[m][k])]
-                                    # K = local_output_size
-                                    # K = local_output_size * self.tmp_counts[k][torch.meshgrid(param_idx[m][k])]
-                                    tmp_v[torch.meshgrid(param_idx[m][k])] += K * local_parameters[m][k]
-                                    count[k][torch.meshgrid(param_idx[m][k])] += K
-                                    tmp_counts_cpy[k][torch.meshgrid(param_idx[m][k])] += 1
-                            else:
-                                tmp_v[param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]] * local_parameters[m][k]
-                                count[k][param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]]
-                                tmp_counts_cpy[k][param_idx[m][k]] += 1
+                                output_size = v.size(0)
+                                scaler_rate = self.model_rate[user_idx[m]] / self.cfg['global_model_rate']
+                                local_output_size = int(np.ceil(output_size * scaler_rate))
+                                if self.cfg['weighting'] == 'avg':
+                                    K = 1
+                                elif self.cfg['weighting'] == 'width':
+                                    K = local_output_size
+                                elif self.cfg['weighting'] == 'updates':
+                                    K = self.tmp_counts[k][torch.meshgrid(param_idx[m][k])]
+                                elif self.cfg['weighting'] == 'updates_width':
+                                    K = local_output_size * self.tmp_counts[k][torch.meshgrid(param_idx[m][k])]
+                                # K = self.tmp_counts[k][torch.meshgrid(param_idx[m][k])]
+                                # K = local_output_size
+                                # K = local_output_size * self.tmp_counts[k][torch.meshgrid(param_idx[m][k])]
+                                tmp_v[torch.meshgrid(param_idx[m][k])] += K * local_parameters[m][k]
+                                count[k][torch.meshgrid(param_idx[m][k])] += K
+                                tmp_counts_cpy[k][torch.meshgrid(param_idx[m][k])] += 1
                         else:
-                            if 'linear' in k:
-                                label_split = self.label_split[user_idx[m]]
-                                param_idx[m][k] = param_idx[m][k][label_split]
-                                tmp_v[param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]] * local_parameters[m][k][
-                                    label_split]
-                                count[k][param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]]
-                                tmp_counts_cpy[k][param_idx[m][k]] += 1
-                            else:
-                                tmp_v[param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]] * local_parameters[m][k]
-                                count[k][param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]]
-                                tmp_counts_cpy[k][param_idx[m][k]] += 1
+                            tmp_v[param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]] * local_parameters[m][k]
+                            count[k][param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]]
+                            tmp_counts_cpy[k][param_idx[m][k]] += 1
                     else:
-                        tmp_v += self.tmp_counts[k] * local_parameters[m][k]
-                        count[k] += self.tmp_counts[k]
-                        tmp_counts_cpy[k] += 1
-                tmp_v[count[k] > 0] = tmp_v[count[k] > 0].div_(count[k][count[k] > 0])
-                v[count[k] > 0] = tmp_v[count[k] > 0].to(v.dtype)
-                self.tmp_counts = tmp_counts_cpy
-            self.global_parameters = updated_parameters
-        else:
-            raise ValueError('Not valid aggregate')
+                        if 'linear' in k:
+                            label_split = self.label_split[user_idx[m]]
+                            param_idx[m][k] = param_idx[m][k][label_split]
+                            tmp_v[param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]] * local_parameters[m][k][
+                                label_split]
+                            count[k][param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]]
+                            tmp_counts_cpy[k][param_idx[m][k]] += 1
+                        else:
+                            tmp_v[param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]] * local_parameters[m][k]
+                            count[k][param_idx[m][k]] += self.tmp_counts[k][param_idx[m][k]]
+                            tmp_counts_cpy[k][param_idx[m][k]] += 1
+                else:
+                    tmp_v += self.tmp_counts[k] * local_parameters[m][k]
+                    count[k] += self.tmp_counts[k]
+                    tmp_counts_cpy[k] += 1
+            tmp_v[count[k] > 0] = tmp_v[count[k] > 0].div_(count[k][count[k] > 0])
+            v[count[k] > 0] = tmp_v[count[k] > 0].to(v.dtype)
+            self.tmp_counts = tmp_counts_cpy
+        self.global_parameters = updated_parameters
         self.global_model.load_state_dict(self.global_parameters)
         return
 

@@ -11,7 +11,7 @@ from models import resnet
 from utils import make_optimizer, collate, to_device
 
 
-@ray.remote(num_gpus=0.15, num_cpus=4)
+@ray.remote(num_gpus=0.15)
 class ResnetClient:
     def __init__(self, log_path, cfg):
         # with open('config.yml', 'r') as f:
@@ -109,7 +109,6 @@ class ResnetClient:
         else:
             model = model.to('cuda')
             data_loader = make_data_loader({'test': SplitDataset(dataset, data_split[m])})['test']
-
         results = []
         count = 0
         mean = 0

@@ -100,7 +100,7 @@ class ResnetClient:
         metric = Metric()
         [dataset, data_split, model, label_split] = ray.get(ids)
 
-        if epoch % 50 == 0:
+        if epoch % 25 == 0 and 0:
             self.model = resnet.resnet18(model_rate=self.model_rate, cfg=self.cfg).to('cuda')
             self.model.load_state_dict(self.local_parameters)
             model = self.model
@@ -115,7 +115,7 @@ class ResnetClient:
         for _, data_input in enumerate(data_loader):
             data_input = collate(data_input)
             input_size = data_input['img'].size(0)
-            if epoch % 50 == 0:
+            if epoch % 25 == 0 and 0:
                 data_input = to_device(data_input, 'cpu')
             else:
                 data_input['label_split'] = torch.tensor(label_split[m])
@@ -124,7 +124,7 @@ class ResnetClient:
             output['loss'] = output['loss'].mean() if cfg['world_size'] > 1 else output['loss']
             evaluation = metric.evaluate(cfg['metric_name']['test']['Local'], data_input, output)
             results.append((evaluation, input_size))
-            if epoch % 50 == 0:
+            if epoch % 25 == 0 and 0:
                 # 只输出Acc，暂时不管loss
                 n = 1
                 for key, value in evaluation.items():
@@ -132,7 +132,7 @@ class ResnetClient:
                         mean += int(value)
                         count += 1
                     n = n + 1
-        if epoch % 50 == 0:
+        if epoch % 25 == 0 and 0:
             print("--------------")
             print("这是客户端{}的精度，使用全体测试集".format(m))
             print("模型rate：{}".format(self.model_rate))

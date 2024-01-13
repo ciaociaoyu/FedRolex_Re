@@ -3,7 +3,7 @@ from collections import OrderedDict
 import numpy as np
 import ray
 import torch
-
+from models import resnet
 import pdb
 
 
@@ -115,16 +115,20 @@ class ResnetServerRoll:
 
     def broadcast(self, local, lr):
         cfg = self.cfg
-        self.stage = self.rounds // 300
-        # if 1000 > self.rounds > 0:
-        #     self.stage = 0
-        # else:
-        #     self.stage = (self.rounds - 1000) // 600 + 1
-        if 100 < self.rounds < 2900:
-            if self.rounds % 300 == 0:
+        self.stage = self.rounds // 100
+        if 10 < self.rounds < 190:
+            if self.rounds % 100 == 0:
                 # 扩展模型
                 if cfg['interpolate'] == 'bi':
-                    self.model_scaler_rate(2 ** (self.stage - 1) * 0.0625, 2 ** (self.stage) * 0.0625)
+                    # self.model_scaler_rate_bi(2 ** (self.stage) * 0.0625)
+                    self.cfg['global_model_rate'] = 1
+                    cfg = self.cfg
+                    self.model_scaler_rate_bi(self.cfg['global_model_rate'])
+                if cfg['interpolate'] == 'pz':
+                    # self.model_scaler_rate_pz(2 ** (self.stage) * 0.0625)
+                    self.cfg['global_model_rate'] = 1
+                    cfg = self.cfg
+                    self.model_scaler_rate_pz(self.cfg['global_model_rate'])
 
         self.global_model.train(True)
         num_active_users = cfg['active_user']
@@ -154,13 +158,9 @@ class ResnetServerRoll:
             self.model_rate = np.array(self.rate)
             # 每次都重新赋值一遍
             if self.stage == 0:
-                self.b_rate = 0.0625
-            elif self.stage == 1:
-                self.b_rate = 0.125
-            elif self.stage == 2:
-                self.b_rate = 0.25
-            elif self.stage == 3:
                 self.b_rate = 0.5
+            elif self.stage == 1:
+                self.b_rate = 1
             else:
                 self.b_rate = 1
         else:
@@ -187,10 +187,12 @@ class ResnetServerRoll:
                                 input_idx_i_m = idx_i[m]
                                 if self.model_rate[self.user_idx[m]] > self.b_rate:
                                     # 啥都不做，正常分配
-                                    scaler_rate = self.b_rate
-                                else:
-                                    # 分配力所能及的
-                                    scaler_rate = self.model_rate[self.user_idx[m]]
+                                    self.model_rate[self.user_idx[m]] = self.b_rate
+                                # else:
+                                # 分配力所能及的
+                                # self.model_rate[self.user_idx[m]] = self.model_rate[self.user_idx[m]]
+                                scaler_rate = self.model_rate[user_idx[m]] / cfg['global_model_rate']
+                                # global_model_rate动态变化，所以scaler_rate也需要动态变化
                                 model_idx = torch.arange(output_size, device=v.device)
                                 output_idx_i_m = model_idx[:int(np.ceil(output_size * scaler_rate))]
                                 # 这个可以让模型正确初始化
@@ -219,83 +221,69 @@ class ResnetServerRoll:
                             idx[m][k] = input_idx_i_m
                 else:
                     pass
-
         return idx
 
-    def model_scaler_rate(self, scaler_rate1, scaler_rate2):
+    def model_scaler_rate_bi(self, scaler_rate_temp):
+        # 这个函数把全局模型扩张到scaler_rate_temp
+        # scaler_rate_temp是新的全局模型比率
         cfg = self.cfg
-        idx_i = [None for _ in range(2)]
-        idx = [OrderedDict() for _ in range(2)]
+        # 创建一个新的全局模型
+        global_model_temp = resnet.resnet18(model_rate=scaler_rate_temp, cfg=cfg).to(cfg['device'])
+        global_model_temp_para = global_model_temp.state_dict()
+        for k, v in global_model_temp_para.items():
+            # 这里把（原始大模型的的一个tensor），插值放到新的模型中（扩张后的）
+            tmp_v = self.interpolate_tensor(self.global_parameters[k], v.size())
+            v = tmp_v
+            global_model_temp_para[k] = v
+        # 更换全局模型
+        # 参数替换
+        self.global_parameters = global_model_temp_para
+        # 模型替换
+        self.global_model = global_model_temp
+        # 加载参数
+        self.global_model.load_state_dict(self.global_parameters)
+        return
+
+    def model_scaler_rate_pz(self, scaler_rate_temp):
+        cfg = self.cfg
+        global_model_temp = resnet.resnet18(model_rate=scaler_rate_temp, cfg=cfg).to(cfg['device'])
+        global_model_temp_para = global_model_temp.state_dict()
+        for k, v in global_model_temp_para.items():
+            global_model_temp_para[k] = torch.zeros_like(v)
+            # 变成了全0的模型
         for k, v in self.global_parameters.items():
-            parameter_type = k.split('.')[-1]
-            for m in range(2):
-                if 'weight' in parameter_type or 'bias' in parameter_type:
-                    if parameter_type == 'weight':
-                        if v.dim() > 1:
-                            input_size = v.size(1)
-                            output_size = v.size(0)
-                            if 'conv1' in k or 'conv2' in k:
-                                if idx_i[m] is None:
-                                    idx_i[m] = torch.arange(input_size, device=v.device)
-                                # idx_i是下一层的输入通道，上一层的输出通道=下一层的输入通道
-                                # input_idx_i_m是这一层的输入通道
-                                input_idx_i_m = idx_i[m]
-                                if m == 0:
-                                    scaler_rate = scaler_rate1
-                                else:
-                                    scaler_rate = scaler_rate2
-                                model_idx = torch.arange(output_size, device=v.device)
-                                output_idx_i_m = model_idx[:int(np.ceil(output_size * scaler_rate))]
-                                idx_i[m] = output_idx_i_m
-                            elif 'shortcut' in k:
-                                input_idx_i_m = idx[m][k.replace('shortcut', 'conv1')][1]
-                                output_idx_i_m = idx_i[m]
-                            elif 'linear' in k:
-                                input_idx_i_m = idx_i[m]
-                                output_idx_i_m = torch.arange(output_size, device=v.device)
-                            else:
-                                raise ValueError('Not valid k')
-                            idx[m][k] = (output_idx_i_m, input_idx_i_m)
-                        else:
-                            input_idx_i_m = idx_i[m]
-                            idx[m][k] = input_idx_i_m
-                    else:
-                        input_size = v.size(0)
-                        if 'linear' in k:
-                            input_idx_i_m = torch.arange(input_size, device=v.device)
-                            idx[m][k] = input_idx_i_m
-                        else:
-                            # 偏置层是一维的
-                            input_idx_i_m = idx_i[m]
-                            idx[m][k] = input_idx_i_m
-                else:
-                    pass
-        for k, v in self.global_parameters.items():
-            tmp_v = self.interpolate_tensor(v[torch.meshgrid(idx[0][k])], v[torch.meshgrid(idx[1][k])].size())
-            v[torch.meshgrid(idx[1][k])] = tmp_v
-            self.global_parameters[k] = v
+            temp_para_tensor = global_model_temp_para[k]
+            # 检查所有维度的尺寸
+            if all(v.size(dim) <= temp_para_tensor.size(dim) for dim in range(v.dim())):
+                # 使用 advanced indexing 赋值
+                slices = tuple(slice(0, v.size(dim)) for dim in range(v.dim()))
+                global_model_temp_para[k][slices] = v
+            else:
+                # 尺寸不匹配，抛出错误
+                raise ValueError(
+                    f"尺寸错误：self.global_parameters 中的 '{k}' 尺寸大于 global_model_temp_para 中的对应张量。")
+        # 更换全局模型
+        # 参数替换
+        self.global_parameters = global_model_temp_para
+        # 模型替换
+        self.global_model = global_model_temp
+        # 加载参数
+        self.global_model.load_state_dict(self.global_parameters)
         return
 
     def interpolate_tensor(self, input_tensor, output_shape):
         input_dim = len(input_tensor.shape)
         input_shape = input_tensor.shape
-
         if len(output_shape) != input_dim:
             raise ValueError("Length of output_shape must be equal to the dimension of input_tensor.")
-
         output_tensor = input_tensor
-
         for dim in range(input_dim):
             if input_shape[dim] == output_shape[dim]:
                 continue
-
             new_shape = list(output_tensor.shape)
             new_shape[dim] = output_shape[dim]
-
             indices = torch.linspace(0, input_shape[dim] - 1, steps=output_shape[dim])
-
             temp_tensor = torch.zeros(new_shape)
-
             for i in range(output_shape[dim]):
                 idx = int(indices[i])
                 frac = indices[i] - idx
@@ -338,10 +326,6 @@ class ResnetServerRoll:
                     local_parameters[m][k] = copy.deepcopy(v)
         return local_parameters, param_idx
 
-    def convert12(self, model_state_dict_items):
-        flattened_tensor = torch.cat([param.view(-1) for _, param in model_state_dict_items])
-        return flattened_tensor
-
     def combine(self, local_parameters, param_idx, user_idx):
         # 这个函数增加了MOO(多目标优化)相关的设置
         cfg = self.cfg
@@ -378,9 +362,6 @@ class ResnetServerRoll:
                                     K = self.tmp_counts[k][torch.meshgrid(param_idx[m][k])]
                                 elif self.cfg['weighting'] == 'updates_width':
                                     K = local_output_size * self.tmp_counts[k][torch.meshgrid(param_idx[m][k])]
-                                # K = self.tmp_counts[k][torch.meshgrid(param_idx[m][k])]
-                                # K = local_output_size
-                                # K = local_output_size * self.tmp_counts[k][torch.meshgrid(param_idx[m][k])]
                                 tmp_v[torch.meshgrid(param_idx[m][k])] += K * local_parameters[m][k]
                                 count[k][torch.meshgrid(param_idx[m][k])] += K
                                 tmp_counts_cpy[k][torch.meshgrid(param_idx[m][k])] += 1
@@ -412,100 +393,4 @@ class ResnetServerRoll:
         return
 
 
-class ResnetServerRandom(ResnetServerRoll):
-    def split_model(self, user_idx):
-        cfg = self.cfg
-        idx_i = [None for _ in range(len(user_idx))]
-        idx = [OrderedDict() for _ in range(len(user_idx))]
-        for k, v in self.global_parameters.items():
-            parameter_type = k.split('.')[-1]
-            for m in range(len(user_idx)):
-                if 'weight' in parameter_type or 'bias' in parameter_type:
-                    if parameter_type == 'weight':
-                        if v.dim() > 1:
-                            input_size = v.size(1)
-                            output_size = v.size(0)
-                            if 'conv1' in k or 'conv2' in k:
-                                if idx_i[m] is None:
-                                    idx_i[m] = torch.arange(input_size, device=v.device)
-                                input_idx_i_m = idx_i[m]
-                                scaler_rate = {0: 1, 1: 1, 2: 0.5, 3: 0.5, 4: 0.25, 5: 0.25, 6: 0.125, 7: 0.125,
-                                               8: 0.0625, 9: 0.0625}.get(user_idx[m], 1)
-                                local_output_size = int(np.ceil(output_size * scaler_rate))
-                                model_idx = torch.randperm(output_size, device=v.device)
-                                output_idx_i_m = model_idx[:local_output_size]
-                                # 这个可以让模型正确初始化
-                                self.model_rate[self.user_idx[m]] = scaler_rate
-                                idx_i[m] = output_idx_i_m
-                            elif 'shortcut' in k:
-                                input_idx_i_m = idx[m][k.replace('shortcut', 'conv1')][1]
-                                output_idx_i_m = idx_i[m]
-                            elif 'linear' in k:
-                                input_idx_i_m = idx_i[m]
-                                output_idx_i_m = torch.arange(output_size, device=v.device)
-                            else:
-                                raise ValueError('Not valid k')
-                            idx[m][k] = (output_idx_i_m, input_idx_i_m)
-                        else:
-                            input_idx_i_m = idx_i[m]
-                            idx[m][k] = input_idx_i_m
-                    else:
-                        input_size = v.size(0)
-                        if 'linear' in k:
-                            input_idx_i_m = torch.arange(input_size, device=v.device)
-                            idx[m][k] = input_idx_i_m
-                        else:
-                            input_idx_i_m = idx_i[m]
-                            idx[m][k] = input_idx_i_m
-                else:
-                    pass
 
-        return idx
-
-
-class ResnetServerStatic(ResnetServerRoll):
-    def split_model(self, user_idx):
-        cfg = self.cfg
-        idx_i = [None for _ in range(len(user_idx))]
-        idx = [OrderedDict() for _ in range(len(user_idx))]
-        for k, v in self.global_parameters.items():
-            parameter_type = k.split('.')[-1]
-            for m in range(len(user_idx)):
-                if 'weight' in parameter_type or 'bias' in parameter_type:
-                    if parameter_type == 'weight':
-                        if v.dim() > 1:
-                            input_size = v.size(1)
-                            output_size = v.size(0)
-                            if 'conv1' in k or 'conv2' in k:
-                                if idx_i[m] is None:
-                                    idx_i[m] = torch.arange(input_size, device=v.device)
-                                input_idx_i_m = idx_i[m]
-                                scaler_rate = self.model_rate[user_idx[m]] / cfg['global_model_rate']
-                                local_output_size = int(np.ceil(output_size * scaler_rate))
-                                model_idx = torch.arange(output_size, device=v.device)
-                                output_idx_i_m = model_idx[:local_output_size]
-                                idx_i[m] = output_idx_i_m
-                            elif 'shortcut' in k:
-                                input_idx_i_m = idx[m][k.replace('shortcut', 'conv1')][1]
-                                output_idx_i_m = idx_i[m]
-                            elif 'linear' in k:
-                                input_idx_i_m = idx_i[m]
-                                output_idx_i_m = torch.arange(output_size, device=v.device)
-                            else:
-                                raise ValueError('Not valid k')
-                            idx[m][k] = (output_idx_i_m, input_idx_i_m)
-                        else:
-                            input_idx_i_m = idx_i[m]
-                            idx[m][k] = input_idx_i_m
-                    else:
-                        input_size = v.size(0)
-                        if 'linear' in k:
-                            input_idx_i_m = torch.arange(input_size, device=v.device)
-                            idx[m][k] = input_idx_i_m
-                        else:
-                            input_idx_i_m = idx_i[m]
-                            idx[m][k] = input_idx_i_m
-                else:
-                    pass
-
-        return idx

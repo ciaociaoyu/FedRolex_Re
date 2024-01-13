@@ -103,6 +103,8 @@ def run_experiment():
     os.environ['PYTHONHASHSEED'] = str(seed)
     dataset = fetch_dataset(cfg['data_name'], cfg['subset'])
     process_dataset(dataset)
+    # 改一下全局模型比率，从最小的开始
+    cfg["global_model_rate"] = 0.5
     global_model = resnet.resnet18(model_rate=cfg["global_model_rate"], cfg=cfg).to(cfg['device'])
     optimizer = make_optimizer(global_model, cfg['lr'])
     scheduler = make_scheduler(optimizer)
@@ -131,12 +133,7 @@ def run_experiment():
         # if epoch > 10:
         #     lr = 2e-4
         local, param_idx, user_idx = server.broadcast(local, lr)
-        stage = epoch // 300
-        test_rate = 2 ** stage * 0.0625
-        test_model_dict = server.generate_model_for_test(test_rate)
-        test_model = resnet.resnet18(model_rate=test_rate, cfg=cfg).to('cuda')
-        test_model.load_state_dict(test_model_dict)
-        # test_model = global_model
+        test_model = global_model
         test(dataset['test'], data_split['test'], label_split, test_model, logger, epoch, local, user_idx)
         t1 = time.time()
 

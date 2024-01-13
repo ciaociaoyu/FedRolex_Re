@@ -95,11 +95,9 @@ class TransformerServerRoll:
             parameter_type = k.split('.')[-1]
             for m in range(len(user_idx)):
                 if self.model_rate[self.user_idx[m]] > self.b_rate:
-                    # 啥都不做，正常分配
+                    # 啥都不做，正常分配广播的rate
                     self.model_rate[self.user_idx[m]] = self.b_rate
-                # else:
-                    # 分配力所能及的
-                    # self.model_rate[self.user_idx[m]] = self.model_rate[self.user_idx[m]]
+
                 scaler_rate = self.model_rate[user_idx[m]] / cfg['global_model_rate']
                 # global_model_rate动态变化，所以scaler_rate也需要动态变化
 

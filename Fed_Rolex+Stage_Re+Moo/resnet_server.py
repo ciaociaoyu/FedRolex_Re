@@ -31,93 +31,21 @@ class ResnetServerRoll:
         self.roll_idx = {}
         self.rounds = 0
         self.tmp_counts = {}
-        for k, v in self.global_parameters.items():
-            self.tmp_counts[k] = torch.ones_like(v)
         self.reshuffle_params()
         self.reshuffle_rounds = 512
 
         # 广播分发的rate
         self.b_rate = 0
 
-    def reshuffle_params(self):
-        for k, v in self.global_parameters.items():
-            if 'conv1' in k or 'conv2' in k:
-                output_size = v.size(0)
-                self.model_idxs[k] = torch.randperm(output_size, device=v.device)
-                self.roll_idx[k] = 0
-        return self.model_idxs
-
-    def generate_model_for_test(self, scaler_rate):
-        # 产生一个特定比率的模型
-        cfg = self.cfg
-        idx_i = None
-        idx = {}
-        for k, v in self.global_parameters.items():
-            parameter_type = k.split('.')[-1]
-            if 'weight' in parameter_type or 'bias' in parameter_type:
-                if parameter_type == 'weight':
-                    if v.dim() > 1:
-                        input_size = v.size(1)
-                        output_size = v.size(0)
-                        if 'conv1' in k or 'conv2' in k:
-                            if idx_i is None:
-                                idx_i = torch.arange(input_size, device=v.device)
-                            # idx_i是下一层的输入通道，上一层的输出通道=下一层的输入通道
-                            # input_idx_i_m是这一层的输入通道
-                            input_idx_i_m = idx_i
-                            model_idx = torch.arange(output_size, device=v.device)
-                            output_idx_i_m = model_idx[:int(np.ceil(output_size * scaler_rate))]
-                            # 这个可以让模型正确初始化
-                            idx_i = output_idx_i_m
-                        elif 'shortcut' in k:
-                            input_idx_i_m = idx[k.replace('shortcut', 'conv1')][1]
-                            output_idx_i_m = idx_i
-                        elif 'linear' in k:
-                            input_idx_i_m = idx_i
-                            output_idx_i_m = torch.arange(output_size, device=v.device)
-                        else:
-                            raise ValueError('Not valid k')
-                        idx[k] = (output_idx_i_m, input_idx_i_m)
-                    else:
-                        input_idx_i_m = idx_i
-                        idx[k] = input_idx_i_m
-                else:
-                    input_size = v.size(0)
-                    if 'linear' in k:
-                        input_idx_i_m = torch.arange(input_size, device=v.device)
-                        idx[k] = input_idx_i_m
-                    else:
-                        # 偏置层是一维的
-                        input_idx_i_m = idx_i
-                        idx[k] = input_idx_i_m
-            else:
-                pass
-        local_parameters = {}
-        for k, v in self.global_parameters.items():
-            parameter_type = k.split('.')[-1]
-            if 'weight' in parameter_type or 'bias' in parameter_type:
-                if 'weight' in parameter_type:
-                    if v.dim() > 1:
-                        local_parameters[k] = copy.deepcopy(v[torch.meshgrid(idx[k])])
-                    else:
-                        local_parameters[k] = copy.deepcopy(v[idx[k]])
-                else:
-                    local_parameters[k] = copy.deepcopy(v[idx[k]])
-            else:
-                local_parameters[k] = copy.deepcopy(v)
-        return local_parameters
-
     def step(self, local_parameters, param_idx, user_idx):
         self.combine(local_parameters, param_idx, user_idx)
         self.rounds += 1
-        if self.rounds % self.reshuffle_rounds:
-            self.reshuffle_params()
 
     def broadcast(self, local, lr):
         cfg = self.cfg
-        self.stage = self.rounds // 100
-        if 10 < self.rounds < 190:
-            if self.rounds % 100 == 0:
+        self.stage = self.rounds // 4
+        if 1 < self.rounds < 5:
+            if self.rounds % 4 == 0:
                 # 扩展模型
                 if cfg['interpolate'] == 'bi':
                     # self.model_scaler_rate_bi(2 ** (self.stage) * 0.0625)
@@ -188,15 +116,10 @@ class ResnetServerRoll:
                                 if self.model_rate[self.user_idx[m]] > self.b_rate:
                                     # 啥都不做，正常分配
                                     self.model_rate[self.user_idx[m]] = self.b_rate
-                                # else:
-                                # 分配力所能及的
-                                # self.model_rate[self.user_idx[m]] = self.model_rate[self.user_idx[m]]
                                 scaler_rate = self.model_rate[user_idx[m]] / cfg['global_model_rate']
                                 # global_model_rate动态变化，所以scaler_rate也需要动态变化
                                 model_idx = torch.arange(output_size, device=v.device)
                                 output_idx_i_m = model_idx[:int(np.ceil(output_size * scaler_rate))]
-                                # 这个可以让模型正确初始化
-                                self.model_rate[self.user_idx[m]] = scaler_rate
                                 idx_i[m] = output_idx_i_m
                             elif 'shortcut' in k:
                                 input_idx_i_m = idx[m][k.replace('shortcut', 'conv1')][1]
@@ -228,7 +151,7 @@ class ResnetServerRoll:
         # scaler_rate_temp是新的全局模型比率
         cfg = self.cfg
         # 创建一个新的全局模型
-        global_model_temp = resnet.resnet18(model_rate=scaler_rate_temp, cfg=cfg).to(cfg['device'])
+        global_model_temp = resnet.resnet18(model_rate=scaler_rate_temp, cfg=cfg)
         global_model_temp_para = global_model_temp.state_dict()
         for k, v in global_model_temp_para.items():
             # 这里把（原始大模型的的一个tensor），插值放到新的模型中（扩张后的）
@@ -327,8 +250,6 @@ class ResnetServerRoll:
         return local_parameters, param_idx
 
     def combine(self, local_parameters, param_idx, user_idx):
-        # 这个函数增加了MOO(多目标优化)相关的设置
-        cfg = self.cfg
         count = OrderedDict()
         self.global_parameters = self.global_model.cpu().state_dict()
         updated_parameters = copy.deepcopy(self.global_parameters)
@@ -362,6 +283,9 @@ class ResnetServerRoll:
                                     K = self.tmp_counts[k][torch.meshgrid(param_idx[m][k])]
                                 elif self.cfg['weighting'] == 'updates_width':
                                     K = local_output_size * self.tmp_counts[k][torch.meshgrid(param_idx[m][k])]
+                                # K = self.tmp_counts[k][torch.meshgrid(param_idx[m][k])]
+                                # K = local_output_size
+                                # K = local_output_size * self.tmp_counts[k][torch.meshgrid(param_idx[m][k])]
                                 tmp_v[torch.meshgrid(param_idx[m][k])] += K * local_parameters[m][k]
                                 count[k][torch.meshgrid(param_idx[m][k])] += K
                                 tmp_counts_cpy[k][torch.meshgrid(param_idx[m][k])] += 1

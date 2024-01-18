@@ -31,7 +31,6 @@ class ResnetServerRoll:
         self.roll_idx = {}
         self.rounds = 0
         self.tmp_counts = {}
-        self.reshuffle_params()
         self.reshuffle_rounds = 512
 
         # 广播分发的rate
@@ -43,9 +42,9 @@ class ResnetServerRoll:
 
     def broadcast(self, local, lr):
         cfg = self.cfg
-        self.stage = self.rounds // 4
-        if 1 < self.rounds < 5:
-            if self.rounds % 4 == 0:
+        self.stage = self.rounds // 200
+        if 1 < self.rounds < 900:
+            if self.rounds % 200 == 0:
                 # 扩展模型
                 if cfg['interpolate'] == 'bi':
                     # self.model_scaler_rate_bi(2 ** (self.stage) * 0.0625)
@@ -86,9 +85,13 @@ class ResnetServerRoll:
             self.model_rate = np.array(self.rate)
             # 每次都重新赋值一遍
             if self.stage == 0:
-                self.b_rate = 0.5
+                self.b_rate = 0.625
             elif self.stage == 1:
-                self.b_rate = 1
+                self.b_rate = 0.125
+            elif self.stage == 2:
+                self.b_rate = 0.25
+            elif self.stage == 3:
+                self.b_rate = 0.5
             else:
                 self.b_rate = 1
         else:
@@ -253,6 +256,8 @@ class ResnetServerRoll:
         count = OrderedDict()
         self.global_parameters = self.global_model.cpu().state_dict()
         updated_parameters = copy.deepcopy(self.global_parameters)
+        for k, v in self.global_parameters.items():
+            self.tmp_counts[k] = torch.ones_like(v)
         tmp_counts_cpy = copy.deepcopy(self.tmp_counts)
         for k, v in updated_parameters.items():
             parameter_type = k.split('.')[-1]

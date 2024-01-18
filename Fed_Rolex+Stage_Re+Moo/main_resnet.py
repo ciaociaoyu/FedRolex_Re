@@ -104,7 +104,7 @@ def run_experiment():
     dataset = fetch_dataset(cfg['data_name'], cfg['subset'])
     process_dataset(dataset)
     # 改一下全局模型比率，从最小的开始
-    cfg["global_model_rate"] = 0.5
+    cfg["global_model_rate"] = 0.625
     global_model = resnet.resnet18(model_rate=cfg["global_model_rate"], cfg=cfg).to(cfg['device'])
     optimizer = make_optimizer(global_model, cfg['lr'])
     scheduler = make_scheduler(optimizer)
@@ -123,7 +123,7 @@ def run_experiment():
 
     server = Server(global_model, cfg['model_rate'], dataset_ref, cfg_id)
     local = [ResnetClient.remote(logger.log_path, [cfg_id]) for _ in range(num_active_users)]
-    rates = server.model_rate
+
     t_count = 0.0
     for epoch in range(last_epoch, cfg['num_epochs']['global'] + 1):
         t0 = time.time()

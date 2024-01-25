@@ -52,6 +52,7 @@ class ResnetClient:
 
     def step(self, m, num_active_users, start_time):
         cfg = self.cfg
+        # print(self.model_rate)
         self.model = resnet.resnet18(model_rate=self.model_rate, cfg=self.cfg).to('cuda')
         self.model.load_state_dict(self.local_parameters)
         self.model.train(True)

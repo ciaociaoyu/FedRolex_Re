@@ -35,6 +35,7 @@ class ResnetServerRoll:
 
         # 广播分发的rate
         self.b_rate = 0
+        self.stage_change = 1
 
     def step(self, local_parameters, param_idx, user_idx):
         self.combine(local_parameters, param_idx, user_idx)
@@ -43,20 +44,37 @@ class ResnetServerRoll:
     def broadcast(self, local, lr):
         cfg = self.cfg
         self.stage = self.rounds // 200
+        # print("stage:")
+        # print(self.stage)
+        # 扩展模型
+        if self.stage == 0:
+            self.stage_change = 0
+            self.b_rate = 0.125
+        elif self.stage == 1:
+            self.stage_change = 1
+            self.b_rate = 0.125
+        elif self.stage == 2:
+            self.stage_change = 1
+            self.b_rate = 0.25
+        elif self.stage == 3:
+            self.stage_change = 1
+            self.b_rate = 0.5
+        else:
+            self.stage_change = 0
+            self.b_rate = 1
         if 1 < self.rounds < 900:
-            if self.rounds % 200 == 0:
-                # 扩展模型
+            if self.rounds % 200 == 0 and self.stage_change == 1:
                 if cfg['interpolate'] == 'bi':
                     # self.model_scaler_rate_bi(2 ** (self.stage) * 0.0625)
-                    self.cfg['global_model_rate'] = 1
+
                     cfg = self.cfg
-                    self.model_scaler_rate_bi(self.cfg['global_model_rate'])
+                    self.model_scaler_rate_bi(self.b_rate)
                 if cfg['interpolate'] == 'pz':
                     # self.model_scaler_rate_pz(2 ** (self.stage) * 0.0625)
-                    self.cfg['global_model_rate'] = 1
-                    cfg = self.cfg
-                    self.model_scaler_rate_pz(self.cfg['global_model_rate'])
 
+                    cfg = self.cfg
+                    self.model_scaler_rate_pz(self.b_rate)
+        self.cfg['global_model_rate'] = self.b_rate
         self.global_model.train(True)
         num_active_users = cfg['active_user']
         # user_idx随机选取
@@ -66,7 +84,13 @@ class ResnetServerRoll:
 
         local_parameters, self.param_idx = self.distribute(self.user_idx)
         param_ids = [ray.put(local_parameter) for local_parameter in local_parameters]
-
+        print("global rate")
+        print(cfg['global_model_rate'])
+        # for m in range(10):
+        #    print("cilent rate")
+        #    print(self.model_rate[self.user_idx[m]])
+        #    print("brate")
+        #    print(self.b_rate)
         ray.get([client.update.remote(self.user_idx[m],
                                       self.dataset_ref,
                                       {'lr': lr,
@@ -84,16 +108,7 @@ class ResnetServerRoll:
         elif cfg['model_split_mode'] == 'fix':
             self.model_rate = np.array(self.rate)
             # 每次都重新赋值一遍
-            if self.stage == 0:
-                self.b_rate = 0.625
-            elif self.stage == 1:
-                self.b_rate = 0.125
-            elif self.stage == 2:
-                self.b_rate = 0.25
-            elif self.stage == 3:
-                self.b_rate = 0.5
-            else:
-                self.b_rate = 1
+
         else:
             raise ValueError('Not valid model split mode')
         return
@@ -105,6 +120,9 @@ class ResnetServerRoll:
         for k, v in self.global_parameters.items():
             parameter_type = k.split('.')[-1]
             for m in range(len(user_idx)):
+                if self.model_rate[self.user_idx[m]] >= self.b_rate:
+                    # 啥都不做，正常分配
+                    self.model_rate[self.user_idx[m]] = self.b_rate
                 if 'weight' in parameter_type or 'bias' in parameter_type:
                     if parameter_type == 'weight':
                         if v.dim() > 1:

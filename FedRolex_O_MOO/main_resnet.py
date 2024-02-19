@@ -39,12 +39,14 @@ parser.add_argument('--weighting', default='avg', type=str)
 parser.add_argument('--g_epochs', default=None, type=int)
 parser.add_argument('--l_epochs', default=None, type=int)
 parser.add_argument('--overlap', default=None, type=float)
-parser.add_argument('--moo_restrain', default=None, type=str)
+parser.add_argument('--moo_restrain', default=None, type=float)
+parser.add_argument('--moo_padding', default=None, type=str)
 parser.add_argument('--schedule', default=None, nargs='+', type=int)
 # parser.add_argument('--exp_name', default=None, type=str)
 args = vars(parser.parse_args())
 
 cfg['moo_restrain'] = args['moo_restrain']
+cfg['moo_padding'] = args['moo_padding']
 cfg['overlap'] = args['overlap']
 cfg['weighting'] = args['weighting']
 cfg['init_seed'] = int(args['seed'])

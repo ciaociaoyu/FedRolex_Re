@@ -101,7 +101,7 @@ class MinNormSolver:
         # 计算下一个点
         next_point = proj_grad * t + cur_val
 
-        # 假设 _projection2simplex 已经支持PyTorch张量
+        #
         next_point = MinNormSolver._projection2simplex(next_point)
 
         return next_point

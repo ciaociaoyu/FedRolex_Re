@@ -3,7 +3,7 @@ import torch
 
 
 class MinNormSolver:
-    MAX_ITER = 200
+    MAX_ITER = 250
     STOP_CRIT = 1e-5
 
     def _min_norm_element_from2(v1v1, v1v2, v2v2):
@@ -56,33 +56,23 @@ class MinNormSolver:
                     sol = [(i, j), c, d]
         return sol, dps
 
-    def constrained_objective(z, y, a, b):
-        loss = torch.norm(y - z)
-        # print(loss)
-        # Penalty for sum(z) != 1
-        penalty_sum = torch.abs(torch.sum(z) - 1) * 1e-1
-
-        # Penalty for z not in [a, b]
-        penalty_bounds = torch.sum(torch.clamp(a - z, min=0) + torch.clamp(z - b, min=0)) * 1e-1
-
-        return loss + penalty_sum + penalty_bounds
-
-    def optimize(y, a, b, lr=0.01, max_iter=100, tol=1e-6):
-        z = y.clone().detach().requires_grad_(True)  # Start from y as the initial point, but make it require gradients
-        prev_loss = float('inf')
-
-        for i in range(max_iter):
-            loss = MinNormSolver.constrained_objective(z, y, a, b)
-            if torch.abs(prev_loss - loss) < tol:
+    def _projection2simplex(y):
+        """
+        Given y, it solves argmin_z |y-z|_2 st \sum z = 1 , 1 >= z_i >= 0 for all i
+        """
+        m = len(y)
+        sorted_y, _ = torch.sort(y, descending=True)
+        tmpsum = 0.0
+        tmax_f = (torch.sum(y) - 1.0) / m
+        for i in range(m - 1):
+            tmpsum += sorted_y[i]
+            tmax = (tmpsum - 1) / (i + 1.0)
+            if tmax > sorted_y[i + 1]:
+                tmax_f = tmax
                 break
-            prev_loss = loss.item()
-            gradient = torch.autograd.grad(loss, z)[0]
-            z.data -= lr * gradient  # Update the data in-place
-            z.data.clamp_(a, b)  # ensure bounds in-place
+        return torch.maximum(y - tmax_f, torch.zeros_like(y))
 
-        return z
-
-    def _next_point(cur_val, grad, n, c_a, c_b):
+    def _next_point(cur_val, grad, n):
         proj_grad = grad - (torch.sum(grad) / n)
 
         # 创建空的张量来存储满足条件的值
@@ -111,15 +101,13 @@ class MinNormSolver:
         # 计算下一个点
         next_point = proj_grad * t + cur_val
 
-        # 假设 _projection2simplex 已经支持PyTorch张量
-
-        next_point = MinNormSolver.optimize(next_point, c_a, c_b)
+        #
+        next_point = MinNormSolver._projection2simplex(next_point)
 
         return next_point
 
     def find_min_norm_element(cfg, vecs):
-        cc = cfg['moo_restrain']
-        c_a, c_b = [float(val) for val in cc.split('-')]
+        e = cfg['moo_restrain']
         dps = {}
         init_sol, dps = MinNormSolver._min_norm_2d(vecs, dps)
 
@@ -143,12 +131,12 @@ class MinNormSolver:
             for j in range(n):
                 grad_mat[i, j] = dps[(i, j)]
 
-        while 1:
+        while iter_count < MinNormSolver.MAX_ITER:
             # 计算梯度方向
             grad_dir = -1.0 * torch.matmul(grad_mat, sol_vec)
 
             # 假设 _next_point 已经支持PyTorch张量
-            new_point = MinNormSolver._next_point(sol_vec, grad_dir, n, c_a, c_b)
+            new_point = MinNormSolver._next_point(sol_vec, grad_dir, n)
 
             # 重新计算内积
             v1v1 = torch.tensor(0.0)
@@ -166,15 +154,17 @@ class MinNormSolver:
 
             # 更新解向量
             new_sol_vec = nc * sol_vec + (1 - nc) * new_point
-            
 
+            # 以下为新加入的约束条件
+            # 对 new_sol_vec 的元素进行约束
+            new_sol_vec = torch.clamp(new_sol_vec, min=(0.1-e), max=(0.1+e))
+
+            # 由于约束可能导致元素之和不再是 1，因此需要重新标准化
+            new_sol_vec /= torch.sum(new_sol_vec)
 
             # 检查变化量
             change = new_sol_vec - sol_vec
-            if torch.sum(torch.abs(change)) < MinNormSolver.STOP_CRIT or iter_count > MinNormSolver.MAX_ITER:
-                # 以下为新加入的约束条件
-                # 对 new_sol_vec 的元素进行约束
-                # new_sol_vec = new_sol_vec * 2 * e + 0.1 - 0.2 * e
+            if torch.sum(torch.abs(change)) < MinNormSolver.STOP_CRIT:
                 return new_sol_vec, nd  # 注意这里返回的是 new_sol_vec 而不是 sol_vec
 
             sol_vec = new_sol_vec

@@ -3,8 +3,8 @@ import torch
 
 
 class MinNormSolver:
-    MAX_ITER = 250
-    STOP_CRIT = 1e-5
+    MAX_ITER = 200
+    STOP_CRIT = 1e-4
 
     def _min_norm_element_from2(v1v1, v1v2, v2v2):
         """
@@ -149,7 +149,6 @@ class MinNormSolver:
                     v1v2 += sol_vec[i] * new_point[j] * dps[(i, j)]
                     v2v2 += new_point[i] * new_point[j] * dps[(i, j)]
 
-            # 假设 _min_norm_element_from2 已经支持PyTorch张量
             nc, nd = MinNormSolver._min_norm_element_from2(v1v1, v1v2, v2v2)
 
             # 更新解向量

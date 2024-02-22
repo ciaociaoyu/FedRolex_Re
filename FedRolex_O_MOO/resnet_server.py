@@ -344,10 +344,11 @@ class ResnetServerRoll:
                         tmp_v[torch.meshgrid(temp[m][k])] = local_parameters[m][k] - v[
                             torch.meshgrid(temp[m][k])]
                     local_parameters_gradient[m][k] = tmp_v
-                local_parameters_vector_g[m] = self.convert12(local_parameters_gradient.items()).float()
+                local_parameters_vector_g[m] = self.convert12(local_parameters_gradient[m].items()).float()
             sol, min_norm = MinNormSolver.find_min_norm_element(cfg,
                                                                 [local_parameters_vector_g[m] for m in
                                                                  range(len(local_parameters))])
+            print(sol)
             temp_parameters_vector_g = torch.zeros(len(global_vector_tensor)).float()
             for m in range(len(local_parameters)):
                 temp_parameters_vector_g = temp_parameters_vector_g + torch.tensor(sol[m]) * local_parameters_vector_g[m]

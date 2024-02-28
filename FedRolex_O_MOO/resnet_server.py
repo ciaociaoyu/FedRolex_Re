@@ -292,7 +292,10 @@ class ResnetServerRoll:
                 total = np.sqrt(total.item())
                 for key in difference[m].keys():
                     difference[m][key] /= total
-            alpha = self.solve_centered_w(difference, cfg['moo_restrain'])
+            if cfg['moo_restrain'] == 0:
+                alpha = [0.1 for _ in range(10)]
+            else:
+                alpha = self.solve_centered_w(difference, cfg['moo_restrain'])
             # 得到每个客户端的系数
             print(alpha)
             for k, v in self.global_parameters.items():
@@ -345,9 +348,12 @@ class ResnetServerRoll:
                             torch.meshgrid(temp[m][k])]
                     local_parameters_gradient[m][k] = tmp_v
                 local_parameters_vector_g[m] = self.convert12(local_parameters_gradient[m].items()).float()
-            sol, min_norm = MinNormSolver.find_min_norm_element(cfg,
-                                                                [local_parameters_vector_g[m] for m in
-                                                                 range(len(local_parameters))])
+            if cfg['moo_restrain'] == 0:
+                sol = [0.1 for _ in range(10)]
+            else:
+                sol, min_norm = MinNormSolver.find_min_norm_element(cfg,
+                                                                    [local_parameters_vector_g[m] for m in
+                                                                    range(len(local_parameters))])
             print(sol)
             temp_parameters_vector_g = torch.zeros(len(global_vector_tensor)).float()
             for m in range(len(local_parameters)):
